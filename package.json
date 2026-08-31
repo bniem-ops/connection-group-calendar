@@ -1,0 +1,18 @@
+{
+  "name": "group-calendar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Installable shared calendar (PWA) for a group, with per-event push reminders.",
+  "scripts": {
+    "serve": "node scripts/dev-server.mjs",
+    "gen:vapid": "node scripts/generate-vapid.mjs",
+    "gen:icons": "node scripts/make-icons.mjs",
+    "send:reminders": "node scripts/send-reminders.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "rrule": "^2.8.1",
+    "web-push": "^3.6.7"
+  }
+}

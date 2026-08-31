@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Group Calendar</title>
+  <meta name="theme-color" content="#2563eb" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="app-header__row">
+      <h1 class="app-title">Group Calendar</h1>
+      <div class="app-header__actions">
+        <button id="btn-reminders" class="btn btn--ghost" type="button" title="Reminders">
+          <span aria-hidden="true">&#128276;</span><span class="btn__label"> Reminders</span>
+        </button>
+        <button id="btn-admin" class="btn btn--ghost" type="button">Admin</button>
+      </div>
+    </div>
+    <div class="app-header__row app-nav">
+      <div class="app-nav__left">
+        <button id="btn-prev" class="btn btn--icon" type="button" aria-label="Previous month">&#8249;</button>
+        <button id="btn-today" class="btn" type="button">Today</button>
+        <button id="btn-next" class="btn btn--icon" type="button" aria-label="Next month">&#8250;</button>
+      </div>
+      <h2 id="month-label" class="month-label">&nbsp;</h2>
+    </div>
+    <div id="filter-bar" class="filter-bar" role="group" aria-label="Filter by category"></div>
+    <p id="status-line" class="status-line" role="status"></p>
+  </header>
+
+  <main>
+    <div class="weekday-row" aria-hidden="true">
+      <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+    </div>
+    <div id="grid" class="grid"></div>
+  </main>
+
+  <!-- Day detail -->
+  <dialog id="dialog-day" class="dialog">
+    <form method="dialog">
+      <div class="dialog__head">
+        <h3 id="day-title">Day</h3>
+        <button class="btn btn--icon" value="close" aria-label="Close">&times;</button>
+      </div>
+      <div id="day-events" class="day-events"></div>
+      <div class="dialog__foot" id="day-admin-foot" hidden>
+        <button id="btn-add-on-day" class="btn btn--primary" type="button">Add event this day</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Event detail -->
+  <dialog id="dialog-event" class="dialog">
+    <form method="dialog">
+      <div class="dialog__head">
+        <h3 id="event-title">Event</h3>
+        <button class="btn btn--icon" value="close" aria-label="Close">&times;</button>
+      </div>
+      <dl id="event-body" class="event-body"></dl>
+      <div class="dialog__foot" id="event-admin-foot" hidden>
+        <button id="btn-event-edit" class="btn" type="button">Edit</button>
+        <button id="btn-event-skip" class="btn" type="button" hidden>Skip this date</button>
+        <button id="btn-event-delete" class="btn btn--danger" type="button">Delete</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Sign in -->
+  <dialog id="dialog-auth" class="dialog">
+    <form id="form-auth" method="dialog">
+      <div class="dialog__head">
+        <h3>Admin sign in</h3>
+        <button class="btn btn--icon" value="close" aria-label="Close" type="submit" formnovalidate>&times;</button>
+      </div>
+      <div id="auth-signed-out">
+        <p class="muted">Enter your admin email. We'll send a one-time sign-in link.</p>
+        <label class="field">
+          <span>Email</span>
+          <input id="auth-email" type="email" autocomplete="email" required placeholder="you@example.com" />
+        </label>
+        <p id="auth-msg" class="muted"></p>
+        <div class="dialog__foot">
+          <button id="btn-send-link" class="btn btn--primary" type="button">Send link</button>
+        </div>
+      </div>
+      <div id="auth-signed-in" hidden>
+        <p>Signed in as <strong id="auth-who"></strong>.</p>
+        <p id="auth-admin-note" class="muted"></p>
+        <div class="dialog__foot">
+          <button id="btn-new-event" class="btn btn--primary" type="button">New event</button>
+          <button id="btn-manage-categories" class="btn" type="button">Categories</button>
+          <button id="btn-sign-out" class="btn" type="button">Sign out</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Event editor -->
+  <dialog id="dialog-form" class="dialog dialog--wide">
+    <form id="form-event" method="dialog">
+      <div class="dialog__head">
+        <h3 id="form-title">New event</h3>
+        <button class="btn btn--icon" value="close" aria-label="Close" type="submit" formnovalidate>&times;</button>
+      </div>
+
+      <label class="field">
+        <span>Title</span>
+        <input id="f-title" type="text" required maxlength="200" />
+      </label>
+
+      <div class="field-row">
+        <label class="field">
+          <span>Category</span>
+          <select id="f-category"></select>
+        </label>
+        <label class="field field--check">
+          <input id="f-allday" type="checkbox" />
+          <span>All day</span>
+        </label>
+      </div>
+
+      <div class="field-row">
+        <label class="field">
+          <span>Date</span>
+          <input id="f-date" type="date" required />
+        </label>
+        <label class="field time-only">
+          <span>Start</span>
+          <input id="f-start" type="time" />
+        </label>
+        <label class="field time-only">
+          <span>End</span>
+          <input id="f-end" type="time" />
+        </label>
+      </div>
+
+      <label class="field">
+        <span>Location</span>
+        <input id="f-location" type="text" maxlength="200" />
+      </label>
+      <label class="field">
+        <span>Link (optional)</span>
+        <input id="f-url" type="url" placeholder="https://..." />
+      </label>
+      <label class="field">
+        <span>Description</span>
+        <textarea id="f-desc" rows="3" maxlength="2000"></textarea>
+      </label>
+
+      <fieldset class="fieldset">
+        <legend>Repeat</legend>
+        <div class="field-row">
+          <label class="field">
+            <span>Frequency</span>
+            <select id="f-freq">
+              <option value="">Does not repeat</option>
+              <option value="DAILY">Daily</option>
+              <option value="WEEKLY">Weekly</option>
+              <option value="MONTHLY">Monthly</option>
+            </select>
+          </label>
+          <label class="field repeat-only">
+            <span>Every</span>
+            <input id="f-interval" type="number" min="1" max="52" value="1" />
+          </label>
+          <label class="field repeat-only">
+            <span>Until (optional)</span>
+            <input id="f-until" type="date" />
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset class="fieldset">
+        <legend>Reminders</legend>
+        <div id="reminder-list" class="reminder-list"></div>
+        <div class="reminder-add">
+          <input id="r-amount" type="number" min="1" value="1" />
+          <select id="r-unit">
+            <option value="1">minutes</option>
+            <option value="60">hours</option>
+            <option value="1440" selected>days</option>
+          </select>
+          <button id="btn-add-reminder" class="btn" type="button">Add reminder</button>
+        </div>
+      </fieldset>
+
+      <p id="form-msg" class="muted"></p>
+      <div class="dialog__foot">
+        <button id="btn-save-event" class="btn btn--primary" type="button">Save</button>
+        <button class="btn" value="close" type="submit" formnovalidate>Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Category manager -->
+  <dialog id="dialog-categories" class="dialog">
+    <form method="dialog">
+      <div class="dialog__head">
+        <h3>Categories</h3>
+        <button class="btn btn--icon" value="close" aria-label="Close">&times;</button>
+      </div>
+      <div id="category-list" class="category-list"></div>
+      <div class="reminder-add">
+        <input id="c-name" type="text" placeholder="New category" maxlength="60" />
+        <input id="c-color" type="color" value="#2563eb" />
+        <button id="btn-add-category" class="btn" type="button">Add</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
