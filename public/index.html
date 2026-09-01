@@ -3,71 +3,46 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Group Calendar</title>
-  <meta name="theme-color" content="#2563eb" />
+  <title>Connection Group Calendar</title>
+  <meta name="theme-color" content="#f3f2f2" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500;600&family=Lora:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header class="app-header">
+    <p class="kicker kicker--accent">MERCY HILL &middot; KENNEDY AVE</p>
     <div class="app-header__row">
-      <h1 class="app-title">Group Calendar</h1>
+      <h1 class="app-title">Connection Group</h1>
       <div class="app-header__actions">
-        <button id="btn-reminders" class="btn btn--ghost" type="button" title="Reminders">
-          <span aria-hidden="true">&#128276;</span><span class="btn__label"> Reminders</span>
-        </button>
-        <button id="btn-admin" class="btn btn--ghost" type="button">Admin</button>
+        <button id="btn-reminders" class="linkbtn" type="button">Reminders</button>
+        <button id="btn-admin" class="linkbtn linkbtn--faint" type="button">Admin</button>
       </div>
     </div>
-    <div class="app-header__row app-nav">
-      <div class="app-nav__left">
-        <button id="btn-prev" class="btn btn--icon" type="button" aria-label="Previous month">&#8249;</button>
-        <button id="btn-today" class="btn" type="button">Today</button>
-        <button id="btn-next" class="btn btn--icon" type="button" aria-label="Next month">&#8250;</button>
-      </div>
-      <h2 id="month-label" class="month-label">&nbsp;</h2>
-    </div>
-    <div id="filter-bar" class="filter-bar" role="group" aria-label="Filter by category"></div>
-    <p id="status-line" class="status-line" role="status"></p>
   </header>
 
+  <div class="monthbar" id="monthbar">
+    <span class="monthbar__name" id="month-name">&nbsp;</span>
+    <span class="monthbar__actions">
+      <button id="btn-filter" class="kicker kicker--btn" type="button">FILTER</button>
+      <button id="btn-jump" class="kicker kicker--btn" type="button">JUMP TO MONTH</button>
+    </span>
+  </div>
+
   <main>
-    <div class="weekday-row" aria-hidden="true">
-      <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
-    </div>
-    <div id="grid" class="grid"></div>
+    <button id="btn-earlier" class="earlier" type="button">&#9650; Earlier</button>
+    <div id="weeks" class="weeks"></div>
+    <div id="sentinel" aria-hidden="true"></div>
+    <p id="status-line" class="status-line" role="status"></p>
   </main>
 
-  <!-- Day detail -->
-  <dialog id="dialog-day" class="dialog">
-    <form method="dialog">
-      <div class="dialog__head">
-        <h3 id="day-title">Day</h3>
-        <button class="btn btn--icon" value="close" aria-label="Close">&times;</button>
-      </div>
-      <div id="day-events" class="day-events"></div>
-      <div class="dialog__foot" id="day-admin-foot" hidden>
-        <button id="btn-add-on-day" class="btn btn--primary" type="button">Add event this day</button>
-      </div>
-    </form>
-  </dialog>
-
-  <!-- Event detail -->
-  <dialog id="dialog-event" class="dialog">
-    <form method="dialog">
-      <div class="dialog__head">
-        <h3 id="event-title">Event</h3>
-        <button class="btn btn--icon" value="close" aria-label="Close">&times;</button>
-      </div>
-      <dl id="event-body" class="event-body"></dl>
-      <div class="dialog__foot" id="event-admin-foot" hidden>
-        <button id="btn-event-edit" class="btn" type="button">Edit</button>
-        <button id="btn-event-skip" class="btn" type="button" hidden>Skip this date</button>
-        <button id="btn-event-delete" class="btn btn--danger" type="button">Delete</button>
-      </div>
-    </form>
+  <!-- Event detail + RSVP -->
+  <dialog id="dialog-event" class="sheet">
+    <div id="event-scroll" class="sheet__scroll"></div>
   </dialog>
 
   <!-- Sign in -->
@@ -100,9 +75,9 @@
     </form>
   </dialog>
 
-  <!-- Event editor -->
-  <dialog id="dialog-form" class="dialog dialog--wide">
-    <form id="form-event" method="dialog">
+  <!-- Event editor (admin) -->
+  <dialog id="dialog-form" class="sheet">
+    <form id="form-event" method="dialog" class="sheet__scroll">
       <div class="dialog__head">
         <h3 id="form-title">New event</h3>
         <button class="btn btn--icon" value="close" aria-label="Close" type="submit" formnovalidate>&times;</button>
@@ -110,19 +85,19 @@
 
       <label class="field">
         <span>Title</span>
-        <input id="f-title" type="text" required maxlength="200" />
+        <input id="f-title" class="field__title" type="text" required maxlength="200" />
       </label>
 
-      <div class="field-row">
-        <label class="field">
-          <span>Category</span>
-          <select id="f-category"></select>
-        </label>
-        <label class="field field--check">
-          <input id="f-allday" type="checkbox" />
-          <span>All day</span>
-        </label>
-      </div>
+      <label class="field">
+        <span>Category</span>
+        <div id="f-category-pills" class="pillrow" role="radiogroup" aria-label="Category"></div>
+        <input id="f-category" type="hidden" />
+      </label>
+
+      <label class="field field--check">
+        <input id="f-allday" type="checkbox" />
+        <span>All day</span>
+      </label>
 
       <div class="field-row">
         <label class="field">
@@ -148,8 +123,16 @@
         <input id="f-url" type="url" placeholder="https://..." />
       </label>
       <label class="field">
+        <span>Photo URL (optional)</span>
+        <input id="f-photo" type="url" placeholder="https://..." />
+      </label>
+      <label class="field">
         <span>Description</span>
         <textarea id="f-desc" rows="3" maxlength="2000"></textarea>
+      </label>
+      <label class="field field--check">
+        <input id="f-rsvp" type="checkbox" checked />
+        <span>Ask for RSVPs</span>
       </label>
 
       <fieldset class="fieldset">
@@ -190,9 +173,9 @@
       </fieldset>
 
       <p id="form-msg" class="muted"></p>
-      <div class="dialog__foot">
-        <button id="btn-save-event" class="btn btn--primary" type="button">Save</button>
+      <div class="sheet__foot">
         <button class="btn" value="close" type="submit" formnovalidate>Cancel</button>
+        <button id="btn-save-event" class="btn btn--primary" type="button">Save</button>
       </div>
     </form>
   </dialog>
@@ -207,9 +190,50 @@
       <div id="category-list" class="category-list"></div>
       <div class="reminder-add">
         <input id="c-name" type="text" placeholder="New category" maxlength="60" />
-        <input id="c-color" type="color" value="#2563eb" />
+        <input id="c-color" type="color" value="#b68235" />
         <button id="btn-add-category" class="btn" type="button">Add</button>
       </div>
+    </form>
+  </dialog>
+
+  <!-- Display name (first RSVP) -->
+  <dialog id="dialog-name" class="dialog">
+    <form id="form-name" method="dialog">
+      <div class="dialog__head">
+        <h3>Your name</h3>
+        <button class="btn btn--icon" value="cancel" aria-label="Close" type="submit" formnovalidate>&times;</button>
+      </div>
+      <p class="muted">So the group can see who's coming. You'll only be asked once.</p>
+      <label class="field">
+        <span>Name</span>
+        <input id="name-input" type="text" maxlength="60" autocomplete="name" required placeholder="First name & last initial" />
+      </label>
+      <div class="dialog__foot">
+        <button class="btn" value="cancel" type="submit" formnovalidate>Cancel</button>
+        <button id="btn-name-save" class="btn btn--primary" value="ok" type="submit">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Jump to month -->
+  <dialog id="dialog-jump" class="dialog">
+    <form method="dialog">
+      <div class="dialog__head">
+        <h3>Jump to month</h3>
+        <button class="btn btn--icon" value="close" aria-label="Close">&times;</button>
+      </div>
+      <div id="jump-list" class="jump-list"></div>
+    </form>
+  </dialog>
+
+  <!-- Filter -->
+  <dialog id="dialog-filter" class="dialog">
+    <form method="dialog">
+      <div class="dialog__head">
+        <h3>Show categories</h3>
+        <button class="btn btn--icon" value="close" aria-label="Close">&times;</button>
+      </div>
+      <div id="filter-list" class="filter-list"></div>
     </form>
   </dialog>
 

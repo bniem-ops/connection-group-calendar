@@ -80,6 +80,53 @@ export async function cancelOccurrence(eventId, occurrenceDate) {
   if (error) throw error;
 }
 
+// ---------------------------------------------------------------------------
+// RSVP + members (per-device anonymous auth uid)
+// ---------------------------------------------------------------------------
+
+// All RSVP rows. Small table; the client buckets them by `${event_id}:${date}`.
+export async function fetchRsvps() {
+  const { data, error } = await supabase
+    .from("rsvps")
+    .select("event_id, occurrence_date, user_id, status, note");
+  if (error) throw error;
+  return data || [];
+}
+
+// user_id -> display_name
+export async function fetchMembers() {
+  const { data, error } = await supabase.from("members").select("user_id, display_name");
+  if (error) throw error;
+  const m = new Map();
+  for (const r of data || []) m.set(r.user_id, r.display_name);
+  return m;
+}
+
+export async function setDisplayName(userId, name) {
+  const { error } = await supabase
+    .from("members")
+    .upsert({ user_id: userId, display_name: name }, { onConflict: "user_id" });
+  if (error) throw error;
+}
+
+// status: 'yes' | 'no'. note is optional ("bringing chili").
+export async function setRsvp(userId, eventId, occurrenceDate, status, note) {
+  const row = { event_id: eventId, occurrence_date: occurrenceDate, user_id: userId, status };
+  if (note !== undefined) row.note = note || null;
+  const { error } = await supabase
+    .from("rsvps")
+    .upsert(row, { onConflict: "event_id,occurrence_date,user_id" });
+  if (error) throw error;
+}
+
+export async function clearRsvp(userId, eventId, occurrenceDate) {
+  const { error } = await supabase
+    .from("rsvps")
+    .delete()
+    .match({ event_id: eventId, occurrence_date: occurrenceDate, user_id: userId });
+  if (error) throw error;
+}
+
 export async function createCategory(name, color) {
   const { error } = await supabase.from("categories").insert({ name, color });
   if (error) throw error;

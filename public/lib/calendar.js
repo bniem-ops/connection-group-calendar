@@ -1,72 +1,178 @@
-// Month-grid rendering. Pure DOM, no framework.
+// Rolling-weeks rendering. Pure DOM, no framework.
+// A week block = a 7-column date strip followed by that week's event entries.
 
 import { GROUP_TIMEZONE } from "../config.js";
-import { zonedTimeToInstant, ymd, zonedParts, formatTime } from "./tz.js";
+import { fieldsToInstant, ymd, zonedParts } from "./tz.js";
 
-const MAX_CHIPS = 3;
+const WD_INITIAL = ["S", "M", "T", "W", "T", "F", "S"];
+const WD_ABBR = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+const WD_ORDER = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MON_ABBR = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 
-// The visible grid always starts on the Sunday on/before the 1st and covers
-// 6 weeks, so layout never jumps.
-export function monthGridRange(year, month /* 1-12 */) {
-  const first = zonedTimeToInstant(year, month, 1, 0, 0);
-  const firstWeekday = zonedParts(first).weekday; // "Sun".."Sat"
-  const order = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const lead = order.indexOf(firstWeekday);
-  const start = new Date(first.getTime() - lead * 86400000);
-  const end = new Date(start.getTime() + 42 * 86400000);
-  return { start, end };
+// noon instant for a YYYY-MM-DD, safe against DST when reading date parts.
+const noonOf = (dateStr) => fieldsToInstant(dateStr, "12:00");
+
+export function addDays(dateStr, n) {
+  return ymd(new Date(noonOf(dateStr).getTime() + n * 86400000));
 }
 
-export function renderMonth(container, { year, month, occurrencesByDate, catColor, onDayClick, onEventClick }) {
-  container.innerHTML = "";
-  const { start } = monthGridRange(year, month);
-  const todayStr = ymd(new Date());
+// The Sunday on/before dateStr, as YYYY-MM-DD (in GROUP_TIMEZONE).
+export function startOfWeek(dateStr) {
+  const lead = WD_ORDER.indexOf(zonedParts(noonOf(dateStr)).weekday);
+  return addDays(dateStr, -lead);
+}
 
-  for (let i = 0; i < 42; i++) {
-    const dayInstant = new Date(start.getTime() + i * 86400000);
-    // Use noon to dodge any DST edge when reading the date parts.
-    const noon = new Date(dayInstant.getTime() + 12 * 3600000);
-    const p = zonedParts(noon);
-    const dateStr = `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
+export function weekDays(weekStart) {
+  return Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+}
 
-    const cell = document.createElement("div");
-    cell.className = "cell";
-    if (p.month !== month) cell.classList.add("cell--other");
-    if (dateStr === todayStr) cell.classList.add("cell--today");
-    cell.dataset.date = dateStr;
+const dayNum = (dateStr) => Number(dateStr.slice(8, 10));
+const monthNum = (dateStr) => Number(dateStr.slice(5, 7));
 
-    const num = document.createElement("div");
-    num.className = "cell__num";
-    num.textContent = p.day;
-    cell.appendChild(num);
+// "AUG 30 – SEP 5"
+export function weekSpanLabel(weekStart) {
+  const end = addDays(weekStart, 6);
+  return `${MON_ABBR[monthNum(weekStart) - 1]} ${dayNum(weekStart)} – ${MON_ABBR[monthNum(end) - 1]} ${dayNum(end)}`;
+}
 
-    const list = (occurrencesByDate.get(dateStr) || []).slice();
-    list.sort((a, b) => a.start - b.start);
+// The month a week "belongs to" for the sticky bar: the month of its Wednesday.
+export function weekMonthKey(weekStart) {
+  return addDays(weekStart, 3).slice(0, 7); // YYYY-MM
+}
+export function weekMonthLabel(weekStart) {
+  return new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric", timeZone: GROUP_TIMEZONE })
+    .format(noonOf(addDays(weekStart, 3)));
+}
 
-    list.slice(0, MAX_CHIPS).forEach((occ) => {
-      const chip = document.createElement("div");
-      chip.className = "ev";
-      chip.style.background = catColor(occ.event.category_id);
-      const title = occ.overrideTitle || occ.event.title;
-      chip.textContent = occ.event.all_day ? title : `${formatTime(occ.start)} ${title}`;
-      chip.title = title;
-      chip.addEventListener("click", (e) => {
-        e.stopPropagation();
-        onEventClick(occ);
+function el(tag, className, text) {
+  const n = document.createElement(tag);
+  if (className) n.className = className;
+  if (text != null) n.textContent = text;
+  return n;
+}
+
+// ctx: {
+//   todayStr, curWeekStart, nextWeekStart,
+//   occByDate: Map<dateStr, occ[]>,     // already category-filtered
+//   catColor(id), catTextColor(id), catName(id),
+//   shortTime(date),
+//   renderRsvpControls(container, occ, 'strip'),   // fills RSVP row
+//   canRsvp(occ),
+//   onEntryClick(occ), onDateClick(dateStr),
+// }
+export function buildWeekBlock(weekStart, ctx) {
+  const days = weekDays(weekStart);
+  const repMonth = monthNum(addDays(weekStart, 3));
+
+  const sec = el("section", "week");
+  sec.dataset.weekStart = weekStart;
+  sec.dataset.monthKey = weekMonthKey(weekStart);
+  sec.dataset.monthLabel = weekMonthLabel(weekStart);
+
+  // a. heading row
+  const head = el("div", "week__head");
+  let label = "";
+  if (weekStart === ctx.curWeekStart) label = "THIS WEEK";
+  else if (weekStart === ctx.nextWeekStart) label = "NEXT WEEK";
+  const isCur = weekStart === ctx.curWeekStart;
+  const labelEl = el("span", "week__label" + (isCur ? " week__label--cur" : ""), label);
+  const rule = el("span", "week__rule" + (isCur ? " week__rule--cur" : ""));
+  const span = el("span", "week__span", weekSpanLabel(weekStart));
+  head.append(labelEl, rule, span);
+  sec.appendChild(head);
+
+  // b. date strip
+  const strip = el("div", "week__strip");
+  days.forEach((dstr, i) => {
+    const list = (ctx.occByDate.get(dstr) || []).slice().sort((a, b) => a.start - b.start);
+    const isToday = dstr === ctx.todayStr;
+    const outside = monthNum(dstr) !== repMonth;
+    const hasEv = list.length > 0;
+
+    const col = el("button", "day");
+    col.type = "button";
+    col.dataset.date = dstr;
+    if (isToday) col.classList.add("day--today");
+    if (outside) col.classList.add("day--outside");
+    if (hasEv) col.classList.add("day--events");
+
+    col.appendChild(el("span", "day__wd", WD_INITIAL[i]));
+    col.appendChild(el("span", "day__num", String(dayNum(dstr))));
+
+    const bar = el("span", "day__bar" + (hasEv ? "" : " day__bar--empty"));
+    if (hasEv) {
+      list.slice(0, 4).forEach((o) => {
+        const seg = el("i");
+        seg.style.background = ctx.catColor(o.event.category_id);
+        bar.appendChild(seg);
       });
-      cell.appendChild(chip);
-    });
-
-    if (list.length > MAX_CHIPS) {
-      const more = document.createElement("div");
-      more.className = "ev ev--more";
-      more.textContent = `+${list.length - MAX_CHIPS} more`;
-      cell.appendChild(more);
     }
+    col.appendChild(bar);
+    col.addEventListener("click", () => ctx.onDateClick(dstr));
+    strip.appendChild(col);
+  });
+  sec.appendChild(strip);
 
-    cell.addEventListener("click", () => onDayClick(dateStr, list));
-    container.appendChild(cell);
+  // c. event entries for the week
+  const weekOcc = [];
+  for (const d of days) weekOcc.push(...(ctx.occByDate.get(d) || []));
+  weekOcc.sort((a, b) => a.start - b.start || a.date.localeCompare(b.date));
+
+  if (weekOcc.length) {
+    const entries = el("div", "week__entries");
+    let lastDate = null;
+    for (const occ of weekOcc) {
+      entries.appendChild(buildEntry(occ, occ.date !== lastDate, ctx));
+      lastDate = occ.date;
+    }
+    sec.appendChild(entries);
   }
+  return sec;
 }
 
-export const TZ_NOTE = `Times shown in ${GROUP_TIMEZONE}`;
+function buildEntry(occ, showGutter, ctx) {
+  const ev = occ.event;
+  const art = el("article", "entry");
+  art.dataset.occ = `${ev.id}:${occ.date}`;
+
+  const gutter = el("div", "entry__gutter");
+  if (showGutter) {
+    const wdIdx = WD_ORDER.indexOf(zonedParts(noonOf(occ.date)).weekday);
+    gutter.appendChild(el("span", "entry__num", String(dayNum(occ.date))));
+    gutter.appendChild(el("span", "entry__wd", WD_ABBR[wdIdx]));
+  }
+  art.appendChild(gutter);
+
+  const body = el("div", "entry__body");
+
+  const catRow = el("div", "entry__cat");
+  const dot = el("span", "dot");
+  dot.style.background = ctx.catColor(ev.category_id);
+  const cname = el("span", "entry__catname", ctx.catName(ev.category_id).toUpperCase());
+  cname.style.color = ctx.catTextColor(ev.category_id);
+  const time = el("span", "entry__time", ev.all_day ? "All day" : ctx.shortTime(occ.start));
+  catRow.append(dot, cname, time);
+  body.appendChild(catRow);
+
+  body.appendChild(el("h3", "entry__title", occ.overrideTitle || ev.title));
+
+  const metaBits = [];
+  if (occ.overrideLocation || ev.location) metaBits.push(occ.overrideLocation || ev.location);
+  const note = (ev.description || "").split("\n")[0].trim();
+  if (note) metaBits.push(note);
+  if (metaBits.length) body.appendChild(el("p", "entry__meta", metaBits.join(" · ")));
+
+  if (ev.rsvp_enabled && ctx.canRsvp(occ)) {
+    const rsvp = el("div", "rsvp rsvp--strip");
+    rsvp.dataset.occ = `${ev.id}:${occ.date}`;
+    ctx.renderRsvpControls(rsvp, occ, "strip");
+    body.appendChild(rsvp);
+  }
+
+  art.appendChild(body);
+  art.addEventListener("click", (e) => {
+    if (e.target.closest(".rsvp")) return;
+    ctx.onEntryClick(occ);
+  });
+  return art;
+}
