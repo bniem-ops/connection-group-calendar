@@ -40,19 +40,37 @@ export async function fetchEvents() {
 }
 
 // payload: { title, description, location, url, category_id, starts_at, ends_at,
-//            all_day, rrule, recurrence_end, reminders: [minutes,...] }
+//            all_day, rrule, recurrence_end, photo_url, asks_rsvp,
+//            collects_bring_list, reminders: [minutes,...] }
+//
+// Newer columns (photo_url / asks_rsvp / collects_bring_list) may be missing if
+// 04_rsvps.sql hasn't been applied or PostgREST's schema cache is stale. Rather
+// than hard-fail the whole save, drop any column the API reports as unknown and
+// retry - the feature just won't persist until the migration lands.
+const OPTIONAL_EVENT_COLS = ["photo_url", "asks_rsvp", "collects_bring_list"];
+
+async function writeEventRow(row, existingId) {
+  for (let attempt = 0; attempt < OPTIONAL_EVENT_COLS.length + 1; attempt++) {
+    const res = existingId
+      ? await supabase.from("events").update(row).eq("id", existingId)
+      : await supabase.from("events").insert(row).select("id").single();
+    if (!res.error) return res;
+    const m = /Could not find the '(\w+)' column/.exec(res.error.message || "");
+    if (m && m[1] in row && OPTIONAL_EVENT_COLS.includes(m[1])) {
+      delete row[m[1]];
+      continue;
+    }
+    throw res.error;
+  }
+  throw new Error("Could not save the event (unknown columns).");
+}
+
 export async function saveEvent(payload, existingId) {
   const { reminders = [], ...row } = payload;
   let eventId = existingId;
 
-  if (existingId) {
-    const { error } = await supabase.from("events").update(row).eq("id", existingId);
-    if (error) throw error;
-  } else {
-    const { data, error } = await supabase.from("events").insert(row).select("id").single();
-    if (error) throw error;
-    eventId = data.id;
-  }
+  const res = await writeEventRow(row, existingId);
+  if (!existingId) eventId = res.data.id;
 
   // Replace the reminder set wholesale - simplest correct approach.
   const del = await supabase.from("event_reminders").delete().eq("event_id", eventId);
