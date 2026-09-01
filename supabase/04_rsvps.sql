@@ -29,9 +29,22 @@ create index if not exists rsvps_event_idx on rsvps (event_id, occurrence_date);
 -- Plate image for the event-detail screen. Optional; layout is correct without it.
 alter table events add column if not exists photo_url text;
 
--- Whether the calendar shows an RSVP prompt for this event. Default on; an admin
--- can turn it off per event in the editor.
-alter table events add column if not exists rsvp_enabled boolean not null default true;
+-- Composer toggles. asks_rsvp: show the RSVP prompt for this event (default on).
+-- collects_bring_list: show the "who's bringing what" chips (default off).
+alter table events add column if not exists asks_rsvp boolean not null default true;
+alter table events add column if not exists collects_bring_list boolean not null default false;
+
+-- Fold in the earlier column name if a previous run created it.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_name = 'events' and column_name = 'rsvp_enabled'
+  ) then
+    update events set asks_rsvp = rsvp_enabled;
+    alter table events drop column rsvp_enabled;
+  end if;
+end $$;
 
 -- keep rsvps.updated_at fresh on re-answer (reuses set_updated_at from 01_schema.sql)
 drop trigger if exists rsvps_set_updated_at on rsvps;

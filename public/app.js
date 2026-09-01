@@ -1,16 +1,16 @@
-// Connection Group Calendar - app entry / wiring. Rolling weeks + RSVP.
+// Connection Group Calendar - app entry / wiring.
+// Mobile: month grid + swappable day section (design 1a). >=1100px: three-column
+// admin layout (2c) with a slide-in composer (2d).
 
 import { supabase } from "./lib/supabase.js";
-import { DEFAULT_REMINDER_OFFSETS, GROUP_TIMEZONE } from "./config.js";
+import { GROUP_TIMEZONE } from "./config.js";
 import {
   fetchCategories, fetchEvents, saveEvent, deleteEvent, cancelOccurrence,
-  createCategory, updateCategory, deleteCategory,
+  updateEventTiming, createCategory, updateCategory, deleteCategory,
   fetchRsvps, fetchMembers, setDisplayName, setRsvp, clearRsvp,
 } from "./lib/events.js";
 import { expandAll, buildRRule } from "./lib/recurrence.js";
-import {
-  startOfWeek, addDays, weekDays, weekMonthKey, buildWeekBlock,
-} from "./lib/calendar.js";
+import { monthGridDays, weekOf, addDays, startOfWeek } from "./lib/calendar.js";
 import {
   getSession, onAuthChange, sendMagicLink, signOut, isEmailUser, ensureAnonSession,
 } from "./lib/auth.js";
@@ -18,22 +18,21 @@ import {
   pushSupported, getStatus as pushStatus, subscribe as pushSubscribe,
   unsubscribe as pushUnsubscribe,
 } from "./lib/push.js";
-import { fieldsToInstant, ymd } from "./lib/tz.js";
+import { fieldsToInstant, ymd, zonedParts } from "./lib/tz.js";
 
-const $ = (sel) => document.querySelector(sel);
+const $ = (s) => document.querySelector(s);
 const HIDDEN_KEY = "gc.hiddenCategories";
 const SMOOTH = matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+const isDesktop = () => matchMedia("(min-width: 1100px)").matches;
 
 const state = {
   todayStr: "",
-  curWeekStart: "",
-  nextWeekStart: "",
-  weeks: [],
-  expandedQuiet: new Set(),
-  appending: false,
+  visible: { year: 0, month: 0 },   // 1-12
+  selectedDate: "",
 
   categories: [],
   events: [],
+  occByDate: new Map(),
 
   rsvps: [],
   members: new Map(),
@@ -41,26 +40,25 @@ const state = {
   rsvpCounts: new Map(),
   myUserId: null,
 
+  focusedKey: null,                 // desktop right-rail focused occurrence
+
   session: null,
   isAdmin: false,
   hidden: new Set(JSON.parse(localStorage.getItem(HIDDEN_KEY) || "[]")),
-  editingId: null,
-  formReminders: [],
+
+  composer: { open: false, mode: "new", eventId: null },
 };
 
-// ---------- small helpers ----------
-const el = (tag, cls, text) => {
-  const n = document.createElement(tag);
-  if (cls) n.className = cls;
-  if (text != null) n.textContent = text;
-  return n;
-};
+// ---------- helpers ----------
+const el = (t, c, txt) => { const n = document.createElement(t); if (c) n.className = c; if (txt != null) n.textContent = txt; return n; };
+const pad = (n) => String(n).padStart(2, "0");
 const catById = (id) => state.categories.find((c) => c.id === id);
 const catColor = (id) => (catById(id) ? catById(id).color : "#7d5411");
 const catName = (id) => (catById(id) ? catById(id).name : "Uncategorized");
 const catTextColor = (id) => (catById(id) ? darken(catById(id).color, 0.62) : "#7d5411");
 const occKey = (o) => `${o.event.id}:${o.date}`;
 const splitKey = (k) => { const i = k.lastIndexOf(":"); return [k.slice(0, i), k.slice(i + 1)]; };
+const dayNum = (dstr) => Number(dstr.slice(8, 10));
 
 function darken(hex, f) {
   const n = String(hex).replace("#", "");
@@ -76,25 +74,24 @@ function hexToRgba(hex, a) {
   return `rgba(${p(0)},${p(2)},${p(4)},${a})`;
 }
 function shortTime(date) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: GROUP_TIMEZONE, hour: "numeric", minute: "2-digit", hour12: true,
-  }).formatToParts(date);
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: GROUP_TIMEZONE, hour: "numeric", minute: "2-digit", hour12: true }).formatToParts(date);
   const g = (t) => (parts.find((z) => z.type === t) || {}).value || "";
-  const ap = g("dayPeriod").toLowerCase().startsWith("p") ? "p" : "a";
-  return `${g("hour")}:${g("minute")}${ap}`;
+  return `${g("hour")}:${g("minute")}${g("dayPeriod").toLowerCase().startsWith("p") ? "p" : "a"}`;
 }
-function longDate(date) {
-  return new Intl.DateTimeFormat(undefined, {
-    timeZone: GROUP_TIMEZONE, weekday: "short", month: "short", day: "numeric",
-  }).format(date);
-}
-function timeRange(occ) {
+function timeLabel(occ) {
+  const ev = occ.event;
+  if (ev.all_day) return "All day";
   return occ.end ? `${shortTime(occ.start)} – ${shortTime(occ.end)}` : shortTime(occ.start);
 }
-function monthName(key, withYear) {
-  return new Intl.DateTimeFormat(undefined, {
-    timeZone: GROUP_TIMEZONE, month: "long", ...(withYear ? { year: "numeric" } : {}),
-  }).format(fieldsToInstant(`${key}-15`, "12:00"));
+function longDate(date) {
+  return new Intl.DateTimeFormat(undefined, { timeZone: GROUP_TIMEZONE, weekday: "short", month: "short", day: "numeric" }).format(date);
+}
+function monthLabelParts(y, m) {
+  const d = fieldsToInstant(`${y}-${pad(m)}-15`, "12:00");
+  return {
+    month: new Intl.DateTimeFormat(undefined, { timeZone: GROUP_TIMEZONE, month: "long" }).format(d),
+    year: String(y),
+  };
 }
 function minutesToText(m) {
   let n, unit;
@@ -103,19 +100,15 @@ function minutesToText(m) {
   else { n = m; unit = "minute"; }
   return `${n} ${unit}${n === 1 ? "" : "s"} before`;
 }
-function setStatus(msg) {
-  $("#status-line").textContent = msg || `Times shown in ${GROUP_TIMEZONE}`;
-}
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 function friendly(e) {
   const m = (e && (e.message || e.error_description || e.msg)) || String(e);
-  if (/row-level security|permission denied|violates/i.test(m)) {
-    return "The server rejected that - your account isn't allowed to make this change.";
-  }
+  if (/row-level security|permission denied|violates/i.test(m)) return "The server rejected that - your account isn't allowed to make this change.";
   return m;
 }
+function setStatus(msg) { $("#status-line").textContent = msg || `Times shown in ${GROUP_TIMEZONE}`; }
 
 // ---------- data ----------
 async function loadData() {
@@ -124,14 +117,13 @@ async function loadData() {
     state.categories = cats;
     state.events = evs;
     await loadRsvpData();
-    renderWeeks();
+    renderAll();
     setStatus(`Times shown in ${GROUP_TIMEZONE}`);
   } catch (e) {
     console.error(e);
     setStatus("Could not load data. Check public/config.js and that the SQL was run.");
   }
 }
-
 async function loadRsvpData() {
   if (!state.myUserId) return;
   try {
@@ -139,11 +131,8 @@ async function loadRsvpData() {
     state.rsvps = rsvps;
     state.members = members;
     recomputeRsvp();
-  } catch (e) {
-    console.warn("RSVP data load failed", e);
-  }
+  } catch (e) { console.warn("RSVP load failed", e); }
 }
-
 function recomputeRsvp() {
   state.rsvpMine = new Map();
   state.rsvpCounts = new Map();
@@ -153,134 +142,403 @@ function recomputeRsvp() {
     if (!c) { c = { yes: 0, no: 0, yesNames: [], noNames: [], noteBits: [] }; state.rsvpCounts.set(key, c); }
     const nm = state.members.get(r.user_id) || "Someone";
     if (r.status === "yes") { c.yes++; c.yesNames.push(nm); } else { c.no++; c.noNames.push(nm); }
-    if (r.note) {
-      const t = r.note.trim();
-      c.noteBits.push(`${t.charAt(0).toUpperCase()}${t.slice(1)} — ${nm}`);
-    }
+    if (r.note) { const t = r.note.trim(); c.noteBits.push(`${t.charAt(0).toUpperCase()}${t.slice(1)} — ${nm}`); }
     if (r.user_id === state.myUserId) state.rsvpMine.set(key, r.status);
   }
 }
-
 function applyRsvpLocal(eventId, date, uid, status, note) {
-  const i = state.rsvps.findIndex(
-    (r) => r.event_id === eventId && r.occurrence_date === date && r.user_id === uid
-  );
+  const i = state.rsvps.findIndex((r) => r.event_id === eventId && r.occurrence_date === date && r.user_id === uid);
   const oldNote = i >= 0 ? state.rsvps[i].note : null;
   if (i >= 0) state.rsvps.splice(i, 1);
-  if (status) {
-    state.rsvps.push({
-      event_id: eventId, occurrence_date: date, user_id: uid, status,
-      note: note !== undefined ? note : oldNote,
-    });
-  }
+  if (status) state.rsvps.push({ event_id: eventId, occurrence_date: date, user_id: uid, status, note: note !== undefined ? note : oldNote });
   recomputeRsvp();
 }
 
-// ---------- render: rolling weeks ----------
-function renderWeeks() {
-  const host = $("#weeks");
-  const rangeStart = fieldsToInstant(state.weeks[0], "00:00");
-  const rangeEnd = fieldsToInstant(addDays(state.weeks[state.weeks.length - 1], 7), "00:00");
+// ---------- occurrence bucketing ----------
+function occurrencesForGrid() {
+  const { year, month } = state.visible;
+  const days = monthGridDays(year, month);
+  const rangeStart = fieldsToInstant(days[0].dateStr, "00:00");
+  const rangeEnd = fieldsToInstant(addDays(days[41].dateStr, 1), "00:00");
   const occ = expandAll(state.events, rangeStart, rangeEnd)
     .filter((o) => !state.hidden.has(o.event.category_id || "__none__"));
-
-  const byDate = new Map();
+  const map = new Map();
   for (const o of occ) {
-    if (!byDate.has(o.date)) byDate.set(o.date, []);
-    byDate.get(o.date).push(o);
+    if (!map.has(o.date)) map.set(o.date, []);
+    map.get(o.date).push(o);
   }
+  for (const list of map.values()) list.sort((a, b) => a.start - b.start);
+  return { days, map };
+}
 
-  const ctx = {
-    todayStr: state.todayStr,
-    curWeekStart: state.curWeekStart,
-    nextWeekStart: state.nextWeekStart,
-    occByDate: byDate,
-    catColor, catTextColor, catName, shortTime,
-    canRsvp: (o) => o.date >= state.todayStr,
-    renderRsvpControls,
-    onEntryClick: openEvent,
-    onDateClick: scrollToDate,
-  };
+// ---------- render orchestration ----------
+function renderAll() {
+  const { days, map } = occurrencesForGrid();
+  state.occByDate = map;
+  renderMonthBar();
+  renderWeekhead();
+  renderGrid(days);
+  renderDaySection();
+  renderNextUp();
+  renderLeftRail();
+  renderWeekRail();
+}
 
-  const weekHasEv = (ws) => weekDays(ws).some((d) => byDate.has(d));
+function renderMonthBar() {
+  const { month, year } = monthLabelParts(state.visible.year, state.visible.month);
+  $("#month-label").innerHTML = `${escapeHtml(month)} <span class="yr">${year}</span>`;
+  const t = state.todayStr.split("-").map(Number);
+  const isCurrent = t[0] === state.visible.year && t[1] === state.visible.month;
+  $("#btn-today").hidden = isCurrent;
+}
+
+const WD_LONG = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const WD_SHORT = ["S", "M", "T", "W", "T", "F", "S"];
+function renderWeekhead() {
+  const host = $("#weekhead");
+  if (host.childElementCount) return;
+  for (let i = 0; i < 7; i++) {
+    const c = el("div", "weekhead__cell");
+    c.innerHTML = `<span class="wh-long">${WD_LONG[i]}</span><span class="wh-short">${WD_SHORT[i]}</span>`;
+    host.appendChild(c);
+  }
+}
+
+function renderGrid(days) {
+  const host = $("#grid");
   host.innerHTML = "";
-  let i = 0;
-  while (i < state.weeks.length) {
-    const ws = state.weeks[i];
-    if (!weekHasEv(ws)) {
-      let j = i;
-      while (j < state.weeks.length && !weekHasEv(state.weeks[j])) j++;
-      const runLen = j - i;
-      const runKey = ws;
-      const run = state.weeks.slice(i, j);
-      const hasAnchor = run.includes(state.curWeekStart) || run.includes(state.nextWeekStart);
-      if (runLen >= 3 && !hasAnchor && !state.expandedQuiet.has(runKey)) {
-        const q = el("button", "quiet");
-        q.type = "button";
-        q.appendChild(el("span", null, `${runLen} quiet weeks`));
-        q.onclick = () => { state.expandedQuiet.add(runKey); renderWeeks(); };
-        host.appendChild(q);
-        i = j;
-        continue;
+  const desktop = isDesktop();
+  const selWeek = weekOf(state.selectedDate).days;
+  const { month } = state.visible;
+
+  for (const d of days) {
+    const list = state.occByDate.get(d.dateStr) || [];
+    const inMonth = Number(d.dateStr.slice(5, 7)) === month;
+    const isToday = d.dateStr === state.todayStr;
+    const isSel = d.dateStr === state.selectedDate;
+
+    const cell = el("div", "cell");
+    cell.dataset.date = d.dateStr;
+    cell.setAttribute("role", "gridcell");
+    cell.tabIndex = -1;
+    if (!inMonth) cell.classList.add("cell--out");
+    if (isToday) cell.classList.add("cell--today");
+    if (isSel && !isToday) cell.classList.add("cell--sel");
+    if (isSel && isToday) cell.classList.add("cell--sel");
+    if (desktop && selWeek.includes(d.dateStr)) cell.classList.add("cell--selweek");
+
+    cell.appendChild(el("span", "cell__num", String(d.day)));
+    if (desktop && isToday) cell.appendChild(el("span", "cell__todaytag", "Today"));
+
+    // mobile: up to 3 category dots
+    const dots = el("span", "cell__dots");
+    list.slice(0, 3).forEach((o) => {
+      const i = el("i"); i.style.background = catColor(o.event.category_id); dots.appendChild(i);
+    });
+    cell.appendChild(dots);
+
+    // desktop: up to 2 chips + "+N more"
+    if (desktop) {
+      const chips = el("span", "cell__chips");
+      list.slice(0, 2).forEach((o) => chips.appendChild(buildChip(o)));
+      cell.appendChild(chips);
+      if (list.length > 2) cell.appendChild(el("span", "cell__more", `+${list.length - 2} more`));
+      const plus = el("span", "cell__plus", "+");
+      cell.appendChild(plus);
+      if (state.isAdmin) {
+        cell.addEventListener("dragover", (e) => { e.preventDefault(); cell.classList.add("cell--drop"); });
+        cell.addEventListener("dragleave", () => cell.classList.remove("cell--drop"));
+        cell.addEventListener("drop", (e) => onChipDrop(e, cell));
       }
     }
-    host.appendChild(buildWeekBlock(ws, ctx));
-    i++;
+
+    cell.addEventListener("click", (e) => {
+      if (e.target.closest(".chip")) return;
+      selectDate(d.dateStr);
+      if (state.isAdmin && desktop) openComposer("new", null, d.dateStr);
+    });
+    host.appendChild(cell);
   }
-  updateMonthBar();
 }
 
-function updateMonthBar() {
-  const bar = $("#monthbar");
-  if (!bar) return;
-  const y = bar.getBoundingClientRect().bottom + 1;
-  const weeks = document.querySelectorAll("#weeks .week");
-  let key = weeks.length ? weeks[0].dataset.monthKey : null;
-  for (const w of weeks) {
-    if (w.getBoundingClientRect().bottom > y) { key = w.dataset.monthKey; break; }
+function buildChip(occ) {
+  const ev = occ.event;
+  const chip = el("div", "chip");
+  chip.dataset.key = occKey(occ);
+  chip.style.borderLeftColor = catColor(ev.category_id);
+  if (!ev.all_day) chip.appendChild(el("span", "chip__time", shortTime(occ.start)));
+  chip.appendChild(el("span", "chip__title", occ.overrideTitle || ev.title));
+  chip.addEventListener("click", (e) => {
+    e.stopPropagation();
+    selectDate(occ.date);
+    state.focusedKey = occKey(occ);
+    renderWeekRail();
+  });
+  if (state.isAdmin && isDesktop() && !ev.rrule) {
+    chip.draggable = true;
+    chip.addEventListener("dragstart", (e) => e.dataTransfer.setData("text/plain", occKey(occ)));
   }
-  if (key) $("#month-name").textContent = monthName(key).toUpperCase();
+  return chip;
 }
 
-function scrollElIntoView(node, behavior) {
-  const barH = $("#monthbar").getBoundingClientRect().height;
-  const top = node.getBoundingClientRect().top + window.scrollY - barH - 6;
-  window.scrollTo({ top: Math.max(0, top), behavior: behavior || SMOOTH });
-}
-function scrollToWeek(ws, behavior) {
-  const node = document.querySelector(`#weeks .week[data-week-start="${ws}"]`);
-  if (node) scrollElIntoView(node, behavior);
-}
-function scrollToDate(dateStr) {
-  let node = document.querySelector(`#weeks .entry[data-occ$=":${dateStr}"]`);
-  if (!node) node = document.querySelector(`#weeks .week[data-week-start="${startOfWeek(dateStr)}"]`);
-  if (node) scrollElIntoView(node);
-}
-
-function appendWeeks() {
-  if (state.appending || state.weeks.length >= 90) return;
-  state.appending = true;
-  const last = state.weeks[state.weeks.length - 1];
-  for (let k = 1; k <= 8; k++) state.weeks.push(addDays(last, k * 7));
-  renderWeeks();
-  state.appending = false;
-}
-function loadEarlier() {
-  const se = document.scrollingElement || document.documentElement;
-  const h0 = se.scrollHeight;
-  const first = state.weeks[0];
-  for (let k = 4; k >= 1; k--) state.weeks.unshift(addDays(first, -k * 7));
-  renderWeeks();
-  se.scrollTop += se.scrollHeight - h0;
+async function onChipDrop(e, cell) {
+  e.preventDefault();
+  cell.classList.remove("cell--drop");
+  const [evId, oldDate] = splitKey(e.dataTransfer.getData("text/plain"));
+  const newDate = cell.dataset.date;
+  if (!newDate || newDate === oldDate) return;
+  const ev = state.events.find((x) => x.id === evId);
+  if (!ev || ev.rrule) return;
+  const s = new Date(ev.starts_at);
+  const p = zonedParts(s);
+  const newStart = fieldsToInstant(newDate, `${pad(p.hour)}:${pad(p.minute)}`);
+  const durMs = ev.ends_at ? new Date(ev.ends_at) - s : 0;
+  try {
+    await updateEventTiming(evId, {
+      starts_at: newStart.toISOString(),
+      ends_at: durMs ? new Date(newStart.getTime() + durMs).toISOString() : null,
+    });
+    await loadData();
+  } catch (err) { alert(friendly(err)); }
 }
 
-// ---------- RSVP controls (shared by strip + detail band) ----------
+function selectDate(dateStr) {
+  if (state.selectedDate === dateStr) return;
+  state.selectedDate = dateStr;
+  const [y, m] = dateStr.split("-").map(Number);
+  if (y !== state.visible.year || m !== state.visible.month) state.visible = { year: y, month: m };
+  state.focusedKey = null;
+  renderAll();
+  if (!isDesktop()) {
+    const sec = $("#daysection");
+    sec.classList.remove("fade");
+    void sec.offsetWidth;
+    sec.classList.add("fade");
+  }
+}
+
+function goMonth(delta) {
+  let m = state.visible.month + delta, y = state.visible.year;
+  if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; }
+  state.visible = { year: y, month: m };
+  const t = state.todayStr.split("-").map(Number);
+  state.selectedDate = (y === t[0] && m === t[1]) ? state.todayStr : `${y}-${pad(m)}-01`;
+  state.focusedKey = null;
+  renderAll();
+}
+
+// ---------- mobile day section ----------
+function renderDaySection() {
+  const host = $("#daysection");
+  host.innerHTML = "";
+  const sel = state.selectedDate;
+  const noon = fieldsToInstant(sel, "12:00");
+  const p = zonedParts(noon);
+  const labelBits = [
+    WD_LONG[WD_SHORT_INDEX(p.weekday)].toUpperCase(),
+    new Intl.DateTimeFormat(undefined, { timeZone: GROUP_TIMEZONE, month: "long", day: "numeric" }).format(noon).toUpperCase(),
+  ];
+  if (sel === state.todayStr) labelBits.push("TODAY");
+
+  const head = el("div", "dayhead");
+  head.appendChild(el("span", "dayhead__label", labelBits.join(" · ")));
+  if (state.isAdmin) {
+    const add = el("button", "dayhead__add", "Add");
+    add.type = "button";
+    add.onclick = () => openComposer("new", null, sel);
+    head.appendChild(add);
+  }
+  host.appendChild(head);
+
+  const list = state.occByDate.get(sel) || [];
+  if (!list.length) {
+    const empty = el("div", "dayempty");
+    empty.appendChild(el("p", null, "Nothing on this day"));
+    if (state.isAdmin) {
+      const b = el("button", "btn", "Add an event");
+      b.type = "button";
+      b.onclick = () => openComposer("new", null, sel);
+      empty.appendChild(b);
+    }
+    host.appendChild(empty);
+    return;
+  }
+  const cards = el("div", "daycards");
+  for (const occ of list) cards.appendChild(buildDayCard(occ));
+  host.appendChild(cards);
+}
+const WD_SHORT_INDEX = (wd) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(wd);
+
+function buildDayCard(occ) {
+  const ev = occ.event;
+  const card = el("div", "daycard");
+  const cat = el("div", "daycard__cat");
+  const dot = el("span", "dot"); dot.style.background = catColor(ev.category_id);
+  const cn = el("span", "daycard__catname", catName(ev.category_id).toUpperCase());
+  cn.style.color = catTextColor(ev.category_id);
+  cat.append(dot, cn, el("span", "daycard__time", timeLabel(occ)));
+  card.appendChild(cat);
+  card.appendChild(el("div", "daycard__title", occ.overrideTitle || ev.title));
+  const loc = occ.overrideLocation || ev.location;
+  if (loc) card.appendChild(el("div", "daycard__loc", loc));
+  const note = (ev.description || "").split("\n")[0].trim();
+  if (note) card.appendChild(el("div", "daycard__note", note));
+  if (ev.asks_rsvp && occ.date >= state.todayStr) {
+    const rc = el("div", "rsvp");
+    renderRsvpControls(rc, occ, "strip");
+    card.appendChild(rc);
+  }
+  card.addEventListener("click", (e) => { if (e.target.closest(".rsvp")) return; openEvent(occ); });
+  return card;
+}
+
+function renderNextUp() {
+  const host = $("#nextup");
+  host.textContent = "";
+  host.onclick = null;
+  const all = [];
+  for (const [date, list] of state.occByDate) if (date > state.todayStr) for (const o of list) all.push(o);
+  all.sort((a, b) => a.start - b.start);
+  const nx = all[0];
+  if (!nx) return;
+  const wd = new Intl.DateTimeFormat(undefined, { timeZone: GROUP_TIMEZONE, weekday: "short" }).format(nx.start);
+  host.textContent = `Next up — ${wd} ${dayNum(nx.date)}, ${nx.overrideTitle || nx.event.title}`;
+  host.onclick = () => selectDate(nx.date);
+}
+
+// ---------- desktop left rail ----------
+function renderLeftRail() {
+  const rail = $("#cat-rail");
+  rail.innerHTML = "";
+  const counts = new Map();
+  for (const list of state.occByDate.values()) for (const o of list) {
+    const id = o.event.category_id || "__none__";
+    counts.set(id, (counts.get(id) || 0) + 1);
+  }
+  const rows = [...state.categories.map((c) => ({ id: c.id, name: c.name, color: c.color })),
+    { id: "__none__", name: "Uncategorized", color: "#7d5411" }];
+  for (const r of rows) {
+    const row = el("button", "cat-row");
+    row.type = "button";
+    row.setAttribute("aria-pressed", state.hidden.has(r.id) ? "false" : "true");
+    row.innerHTML = `<span class="dot" style="background:${r.color}"></span><span>${escapeHtml(r.name)}</span><span class="cnt">${counts.get(r.id) || 0}</span>`;
+    row.onclick = () => {
+      if (state.hidden.has(r.id)) state.hidden.delete(r.id); else state.hidden.add(r.id);
+      localStorage.setItem(HIDDEN_KEY, JSON.stringify([...state.hidden]));
+      renderAll();
+    };
+    rail.appendChild(row);
+  }
+
+  const needEls = [];
+  let unanswered = 0;
+  for (const [date, list] of state.occByDate) {
+    if (date < state.todayStr) continue;
+    for (const o of list) if (o.event.asks_rsvp && !state.rsvpMine.get(occKey(o))) { unanswered++; needEls.push(o); }
+  }
+  const needs = $("#needs-you");
+  if (unanswered) {
+    needs.innerHTML = `${unanswered} event${unanswered === 1 ? "" : "s"} have no RSVP from you. `;
+    const a = el("button", null, "Answer them all →");
+    a.type = "button";
+    a.onclick = () => { needEls.sort((x, y) => x.start - y.start); selectDate(needEls[0].date); };
+    needs.appendChild(a);
+  } else {
+    needs.textContent = "You're all caught up.";
+  }
+  $("#group-count").textContent = `Group (${state.members.size})`;
+}
+
+// ---------- desktop right rail (selected week) ----------
+function renderWeekRail() {
+  const rail = $("#weekrail");
+  rail.innerHTML = "";
+  if (!isDesktop()) return;
+  const wk = weekOf(state.selectedDate);
+  const weekOcc = [];
+  for (const d of wk.days) for (const o of (state.occByDate.get(d) || [])) weekOcc.push(o);
+  weekOcc.sort((a, b) => a.start - b.start);
+
+  const head = el("div", "weekrail__head");
+  const startNoon = fieldsToInstant(wk.startStr, "12:00");
+  head.appendChild(el("span", "weekrail__title",
+    "Week of " + new Intl.DateTimeFormat(undefined, { timeZone: GROUP_TIMEZONE, month: "short", day: "numeric" }).format(startNoon)));
+  const a = new Intl.DateTimeFormat(undefined, { timeZone: GROUP_TIMEZONE, month: "short", day: "numeric" }).formatToParts(startNoon);
+  const b = new Intl.DateTimeFormat(undefined, { timeZone: GROUP_TIMEZONE, month: "short", day: "numeric" }).formatToParts(fieldsToInstant(wk.endStr, "12:00"));
+  const mon = (parts) => (parts.find((x) => x.type === "month") || {}).value || "";
+  const dnum = (parts) => (parts.find((x) => x.type === "day") || {}).value || "";
+  head.appendChild(el("span", "weekrail__span", `${mon(a).toUpperCase()} ${dnum(a)} – ${mon(b).toUpperCase()} ${dnum(b)}`));
+  rail.appendChild(head);
+  rail.appendChild(el("div", "weekrail__rule"));
+
+  if (!weekOcc.length) {
+    rail.appendChild(el("p", "muted", "No events this week."));
+    return;
+  }
+  let focused = weekOcc.find((o) => occKey(o) === state.focusedKey) || weekOcc[0];
+
+  const fx = el("div", "weekrail__focus");
+  const cat = el("div", "ev2__cat");
+  const dot = el("span", "dot"); dot.style.background = catColor(focused.event.category_id);
+  const cn = el("span", "ev2__catname", catName(focused.event.category_id).toUpperCase());
+  cn.style.color = catTextColor(focused.event.category_id);
+  const wd = new Intl.DateTimeFormat(undefined, { timeZone: GROUP_TIMEZONE, weekday: "short" }).format(focused.start);
+  cat.append(dot, cn, el("span", "fx-when", `${wd} ${dayNum(focused.date)} · ${focused.event.all_day ? "All day" : shortTime(focused.start)}`));
+  fx.appendChild(cat);
+  fx.appendChild(el("div", "fx-title", focused.overrideTitle || focused.event.title));
+  const fnote = (focused.event.description || "").split("\n")[0].trim();
+  if (fnote) fx.appendChild(el("div", "fx-note", fnote));
+
+  if (focused.event.asks_rsvp) {
+    const rc = el("div", "rsvp");
+    renderRsvpControls(rc, focused, "strip");
+    fx.appendChild(rc);
+    const names = el("div", "ev2__names");
+    names.dataset.occ = occKey(focused);
+    fx.appendChild(names);
+  }
+
+  const actions = el("div", "weekrail__actions");
+  const openBtn = el("button", null, "Open");
+  openBtn.type = "button";
+  openBtn.onclick = () => openEvent(focused);
+  actions.appendChild(openBtn);
+  if (state.isAdmin) {
+    const edit = el("button", null, "Edit");
+    edit.type = "button";
+    edit.onclick = () => openComposer("edit", focused.event, null);
+    const dup = el("button", null, "Duplicate");
+    dup.type = "button";
+    dup.onclick = () => openComposer("new", { ...focused.event, id: null, title: `${focused.event.title} (copy)` }, focused.date);
+    actions.append(edit, dup);
+  }
+  fx.appendChild(actions);
+  rail.appendChild(fx);
+  if (focused.event.asks_rsvp) updateNames(occKey(focused));
+
+  const rest = weekOcc.filter((o) => o !== focused);
+  if (rest.length) {
+    const box = el("div", "weekrail__rest");
+    box.appendChild(el("p", "kicker", "Rest of the week"));
+    for (const o of rest) {
+      const row = el("div", "wr-row");
+      row.appendChild(el("span", "wr-date", String(dayNum(o.date))));
+      const mid = el("span");
+      mid.innerHTML = `<span class="wr-title">${escapeHtml(o.overrideTitle || o.event.title)}</span>` +
+        `<div class="wr-sub">${o.event.all_day ? "All day" : escapeHtml(shortTime(o.start))}${o.event.location ? " · " + escapeHtml(o.event.location) : ""}</div>`;
+      row.appendChild(mid);
+      row.onclick = () => { state.focusedKey = occKey(o); renderWeekRail(); };
+      box.appendChild(row);
+    }
+    rail.appendChild(box);
+  }
+}
+
+// ---------- RSVP controls (shared strip + band) ----------
 function renderRsvpControls(container, occ, variant) {
   container.innerHTML = "";
   container.classList.add("rsvp");
-  if (variant === "strip") container.classList.add("rsvp--strip");
   container.dataset.occ = occKey(occ);
-
   const key = occKey(occ);
   const mine = state.rsvpMine.get(key) || null;
   const c = state.rsvpCounts.get(key) || { yes: 0 };
@@ -288,18 +546,15 @@ function renderRsvpControls(container, occ, variant) {
   const yes = el("button", "rsvp-btn rsvp-btn--yes", mine === "yes" ? "I'm in ✓" : "I'm in");
   yes.type = "button";
   yes.setAttribute("aria-pressed", mine === "yes" ? "true" : "false");
-  yes.onclick = (e) => { e.stopPropagation(); handleRsvp(occ, "yes", container, variant); };
+  yes.onclick = (e) => { e.stopPropagation(); handleRsvp(occ, "yes", container); };
 
   const no = el("button", "rsvp-btn rsvp-btn--no", variant === "band" ? "Can't make it" : "Can't");
   no.type = "button";
   no.setAttribute("aria-pressed", mine === "no" ? "true" : "false");
-  no.onclick = (e) => { e.stopPropagation(); handleRsvp(occ, "no", container, variant); };
+  no.onclick = (e) => { e.stopPropagation(); handleRsvp(occ, "no", container); };
 
   container.append(yes, no);
-
-  if (variant === "strip") {
-    container.appendChild(el("span", "rsvp-count", `${c.yes || 0} going`));
-  }
+  if (variant !== "band") container.appendChild(el("span", "rsvp-count", `${c.yes || 0} going`));
 }
 
 function rsvpMsg(container, text) {
@@ -310,8 +565,7 @@ function rsvpMsg(container, text) {
 
 async function ensureMember() {
   if (!state.myUserId) {
-    try { const s = await ensureAnonSession(); state.myUserId = s.user.id; }
-    catch { return false; }
+    try { const s = await ensureAnonSession(); state.myUserId = s.user.id; } catch { return false; }
     await loadRsvpData();
   }
   if (!state.members.has(state.myUserId)) {
@@ -323,18 +577,13 @@ async function ensureMember() {
   return true;
 }
 
-async function handleRsvp(occ, status, container, variant) {
-  if (!(await ensureMember())) {
-    if (container) rsvpMsg(container, "Couldn't save - try again.");
-    return;
-  }
+async function handleRsvp(occ, status, container) {
+  if (!(await ensureMember())) { if (container) rsvpMsg(container, "Couldn't save - try again."); return; }
   const key = occKey(occ);
   const prev = state.rsvpMine.get(key) || null;
   const target = prev === status ? null : status;
-
   applyRsvpLocal(occ.event.id, occ.date, state.myUserId, target);
   refreshRsvpUI(key);
-
   try {
     if (target === null) await clearRsvp(state.myUserId, occ.event.id, occ.date);
     else await setRsvp(state.myUserId, occ.event.id, occ.date, target);
@@ -351,13 +600,8 @@ async function setBringing(occ, text) {
   const status = state.rsvpMine.get(key) || "yes";
   applyRsvpLocal(occ.event.id, occ.date, state.myUserId, status, text);
   refreshRsvpUI(key);
-  try {
-    await setRsvp(state.myUserId, occ.event.id, occ.date, status, text);
-  } catch (e) {
-    console.warn(e);
-    await loadRsvpData();
-    refreshRsvpUI(key);
-  }
+  try { await setRsvp(state.myUserId, occ.event.id, occ.date, status, text); }
+  catch (e) { console.warn(e); await loadRsvpData(); refreshRsvpUI(key); }
 }
 
 function refreshRsvpUI(key) {
@@ -366,7 +610,7 @@ function refreshRsvpUI(key) {
   document.querySelectorAll(`.rsvp[data-occ="${key}"]`).forEach((n) => {
     renderRsvpControls(n, occ, n.closest(".ev2__rsvp") ? "band" : "strip");
   });
-  document.querySelectorAll(`.ev2__names[data-occ="${key}"]`).forEach(() => updateNames(key));
+  updateNames(key);
   document.querySelectorAll(`.ev2__bring[data-occ="${key}"]`).forEach((n) => renderBringing(n, occ));
 }
 
@@ -374,15 +618,9 @@ function updateNames(key) {
   const node = document.querySelector(`.ev2__names[data-occ="${key}"]`);
   if (!node) return;
   const c = state.rsvpCounts.get(key) || { yes: 0, no: 0, yesNames: [] };
-  const total = state.members.size;
-  const havent = Math.max(0, total - c.yes - c.no);
-  if (!c.yes && !c.no) {
-    node.innerHTML = `<span class="sub">No one's answered yet.</span>`;
-    return;
-  }
-  const line1 = c.yes
-    ? `<b>${c.yes} going</b> — ${escapeHtml(c.yesNames.join(", "))}`
-    : `<b>0 going</b>`;
+  const havent = Math.max(0, state.members.size - c.yes - c.no);
+  if (!c.yes && !c.no) { node.innerHTML = `<span class="sub">No one's answered yet.</span>`; return; }
+  const line1 = c.yes ? `<b>${c.yes} going</b> — ${escapeHtml(c.yesNames.join(", "))}` : `<b>0 going</b>`;
   node.innerHTML = `${line1}<span class="sub">${c.no} can't · ${havent} haven't said</span>`;
 }
 
@@ -394,14 +632,11 @@ function renderBringing(container, occ) {
   for (const b of c.noteBits || []) container.appendChild(el("span", "chip-pill", b));
   const add = el("button", "chip-pill chip-pill--add", "+ Add what you're bringing");
   add.type = "button";
-  add.onclick = () => {
-    const t = prompt("What are you bringing?");
-    if (t && t.trim()) setBringing(occ, t.trim());
-  };
+  add.onclick = () => { const t = prompt("What are you bringing?"); if (t && t.trim()) setBringing(occ, t.trim()); };
   container.appendChild(add);
 }
 
-// ---------- event detail (Screen 2) ----------
+// ---------- event detail sheet (Screen 2) ----------
 function openEvent(occ) {
   const ev = occ.event;
   const wrap = $("#event-scroll");
@@ -409,7 +644,7 @@ function openEvent(occ) {
   const key = occKey(occ);
 
   const nav = el("div", "ev2__nav");
-  const back = el("button", "ev2__back", `‹ ${monthName(occ.date.slice(0, 7))}`);
+  const back = el("button", "ev2__back", `‹ ${new Intl.DateTimeFormat(undefined, { timeZone: GROUP_TIMEZONE, month: "long" }).format(occ.start)}`);
   back.type = "button";
   back.onclick = () => $("#dialog-event").close();
   const share = el("button", "ev2__share", "Share");
@@ -420,16 +655,14 @@ function openEvent(occ) {
 
   if (ev.photo_url) {
     const img = document.createElement("img");
-    img.className = "plate";
-    img.alt = "";
+    img.className = "plate"; img.alt = "";
     img.onerror = () => img.remove();
     img.src = ev.photo_url;
     wrap.appendChild(img);
   }
 
   const cat = el("div", "ev2__cat");
-  const dot = el("span", "dot");
-  dot.style.background = catColor(ev.category_id);
+  const dot = el("span", "dot"); dot.style.background = catColor(ev.category_id);
   const cn = el("span", "ev2__catname", catName(ev.category_id).toUpperCase());
   cn.style.color = catTextColor(ev.category_id);
   cat.append(dot, cn);
@@ -439,14 +672,11 @@ function openEvent(occ) {
 
   const when = el("div", "ev2__when");
   when.appendChild(el("span", "ev2__date", longDate(occ.start)));
-  when.appendChild(el("span", "ev2__time", ev.all_day ? "All day" : timeRange(occ)));
+  when.appendChild(el("span", "ev2__time", ev.all_day ? "All day" : timeLabel(occ)));
   wrap.appendChild(when);
 
   const note = (ev.description || "").trim();
-  if (note) {
-    wrap.appendChild(el("div", "ev2__rule"));
-    wrap.appendChild(el("p", "ev2__desc", note));
-  }
+  if (note) { wrap.appendChild(el("div", "ev2__rule")); wrap.appendChild(el("p", "ev2__desc", note)); }
   wrap.appendChild(el("div", "ev2__rule"));
 
   const meta = el("div", "ev2__meta");
@@ -457,23 +687,17 @@ function openEvent(occ) {
     where.appendChild(el("div", null, loc));
     const a = document.createElement("a");
     a.href = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc)}`;
-    a.target = "_blank";
-    a.rel = "noopener";
-    a.textContent = "Open in Maps";
+    a.target = "_blank"; a.rel = "noopener"; a.textContent = "Open in Maps";
     where.appendChild(a);
-  } else {
-    where.appendChild(el("div", "sub", "—"));
-  }
+  } else where.appendChild(el("div", "sub", "—"));
   const rem = el("div");
   rem.appendChild(el("div", "lbl", "Reminder"));
-  rem.appendChild(el("div", null,
-    ev.reminders && ev.reminders.length
-      ? ev.reminders.map((r) => minutesToText(r.offset_minutes)).join(", ")
-      : "None"));
+  rem.appendChild(el("div", null, ev.reminders && ev.reminders.length
+    ? ev.reminders.map((r) => minutesToText(r.offset_minutes)).join(", ") : "None"));
   meta.append(where, rem);
   wrap.appendChild(meta);
 
-  if (ev.rsvp_enabled) {
+  if (ev.asks_rsvp) {
     const band = el("div", "ev2__rsvp");
     band.appendChild(el("p", "kicker", "CAN YOU MAKE IT?"));
     const rc = el("div", "rsvp");
@@ -486,16 +710,18 @@ function openEvent(occ) {
     wrap.appendChild(band);
     updateNames(key);
 
-    const bring = el("div", "ev2__bring");
-    renderBringing(bring, occ);
-    wrap.appendChild(bring);
+    if (ev.collects_bring_list) {
+      const bring = el("div", "ev2__bring");
+      renderBringing(bring, occ);
+      wrap.appendChild(bring);
+    }
   }
 
   if (state.isAdmin) {
-    const foot = el("div", "sheet__foot");
+    const foot = el("div", "composer__foot");
     const edit = el("button", "btn", "Edit");
     edit.type = "button";
-    edit.onclick = () => { $("#dialog-event").close(); openForm(ev, null); };
+    edit.onclick = () => { $("#dialog-event").close(); openComposer("edit", ev, null); };
     foot.appendChild(edit);
     if (occ.recurring) {
       const skip = el("button", "btn", "Skip this date");
@@ -507,14 +733,6 @@ function openEvent(occ) {
       };
       foot.appendChild(skip);
     }
-    const del = el("button", "btn btn--danger", "Delete");
-    del.type = "button";
-    del.onclick = async () => {
-      if (!confirm(`Delete "${ev.title}"${occ.recurring ? " and all its occurrences" : ""}?`)) return;
-      try { await deleteEvent(ev.id); $("#dialog-event").close(); await loadData(); }
-      catch (e) { alert(friendly(e)); }
-    };
-    foot.appendChild(del);
     wrap.appendChild(foot);
   }
 
@@ -528,23 +746,15 @@ function shareEvent(occ) {
   const esc = (s) => String(s).replace(/([,;\\])/g, "\\$1").replace(/\n/g, "\\n");
   const title = occ.overrideTitle || ev.title;
   const ics = [
-    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Connection Group Calendar//EN",
-    "BEGIN:VEVENT",
-    `UID:${ev.id}-${occ.date}@connection-group`,
-    `DTSTAMP:${dt(new Date())}`,
-    `DTSTART:${dt(occ.start)}`,
-    `DTEND:${dt(end)}`,
-    `SUMMARY:${esc(title)}`,
+    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Connection Group Calendar//EN", "BEGIN:VEVENT",
+    `UID:${ev.id}-${occ.date}@connection-group`, `DTSTAMP:${dt(new Date())}`,
+    `DTSTART:${dt(occ.start)}`, `DTEND:${dt(end)}`, `SUMMARY:${esc(title)}`,
     ev.location ? `LOCATION:${esc(ev.location)}` : null,
     ev.description ? `DESCRIPTION:${esc(ev.description)}` : null,
     "END:VEVENT", "END:VCALENDAR",
   ].filter(Boolean).join("\r\n");
   const blurb = `${title} — ${longDate(occ.start)}${ev.all_day ? "" : " " + shortTime(occ.start)}${ev.location ? " · " + ev.location : ""}`;
-
-  if (navigator.share) {
-    navigator.share({ title, text: blurb }).catch(() => {});
-    return;
-  }
+  if (navigator.share) { navigator.share({ title, text: blurb }).catch(() => {}); return; }
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([ics], { type: "text/calendar" }));
   a.download = `${title.replace(/[^\w]+/g, "-").toLowerCase().replace(/^-|-$/g, "")}.ics`;
@@ -555,47 +765,10 @@ function shareEvent(occ) {
 // ---------- display-name prompt ----------
 let nameResolver = null;
 function promptName() {
-  return new Promise((resolve) => {
-    nameResolver = resolve;
-    $("#name-input").value = "";
-    $("#dialog-name").showModal();
-  });
+  return new Promise((resolve) => { nameResolver = resolve; $("#name-input").value = ""; $("#dialog-name").showModal(); });
 }
 
-// ---------- event form (Screen 3) ----------
-function renderReminderList() {
-  const wrap = $("#reminder-list");
-  wrap.innerHTML = "";
-  if (!state.formReminders.length) wrap.innerHTML = '<p class="muted">No reminders.</p>';
-  state.formReminders.slice().sort((a, b) => b - a).forEach((m) => {
-    const row = el("div", "reminder-row");
-    row.appendChild(el("span", null, minutesToText(m)));
-    const rm = el("button", "btn", "Remove");
-    rm.type = "button";
-    rm.onclick = () => { state.formReminders = state.formReminders.filter((x) => x !== m); renderReminderList(); };
-    row.appendChild(rm);
-    wrap.appendChild(row);
-  });
-}
-
-function renderCategoryPills(selectedId) {
-  const wrap = $("#f-category-pills");
-  wrap.innerHTML = "";
-  const entries = [{ id: "", name: "Uncategorized", color: "#7d5411" },
-    ...state.categories.map((c) => ({ id: c.id, name: c.name, color: c.color }))];
-  for (const e of entries) {
-    const b = el("button", "pill");
-    b.type = "button";
-    b.dataset.id = e.id;
-    const on = (selectedId || "") === e.id;
-    b.setAttribute("aria-pressed", on ? "true" : "false");
-    b.innerHTML = `<span class="dot" style="background:${e.color}"></span>${escapeHtml(e.name)}`;
-    if (on) { b.style.borderColor = e.color; b.style.background = hexToRgba(e.color, 0.12); }
-    b.onclick = () => { $("#f-category").value = e.id; renderCategoryPills(e.id); };
-    wrap.appendChild(b);
-  }
-}
-
+// ---------- composer (Screen 4 / mobile Add) ----------
 function parseRRule(rrule) {
   const out = { freq: "", interval: 1 };
   if (!rrule) return out;
@@ -607,50 +780,83 @@ function parseRRule(rrule) {
   return out;
 }
 
-function openForm(ev, presetDate) {
-  state.editingId = ev ? ev.id : null;
-  $("#form-title").textContent = ev ? "Edit event" : "New event";
-  $("#form-msg").textContent = "";
+function renderCategoryPills(selectedId) {
+  const wrap = $("#f-category-pills");
+  wrap.innerHTML = "";
+  const entries = [{ id: "", name: "Uncategorized", color: "#7d5411" },
+    ...state.categories.map((c) => ({ id: c.id, name: c.name, color: c.color }))];
+  for (const e of entries) {
+    const b = el("button", "pill");
+    b.type = "button";
+    const on = (selectedId || "") === e.id;
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+    b.innerHTML = `<span class="dot" style="background:${e.color}"></span>${escapeHtml(e.name)}`;
+    if (on) { b.style.borderColor = e.color; b.style.color = darken(e.color, 0.62); b.style.background = hexToRgba(e.color, 0.12); }
+    b.onclick = () => { $("#f-category").value = e.id; renderCategoryPills(e.id); };
+    wrap.appendChild(b);
+  }
+}
 
-  const start = ev ? new Date(ev.starts_at) : null;
-  $("#f-title").value = ev ? ev.title : "";
+function remindValue(reminders) {
+  const first = reminders && reminders[0];
+  const m = first && (first.offset_minutes ?? first);
+  return ["15", "60", "1440", "2880"].includes(String(m)) ? String(m) : (m ? "1440" : "");
+}
+
+function openComposer(mode, ev, prefillDate) {
+  state.composer = { open: true, mode, eventId: ev && ev.id ? ev.id : null };
+  $("#composer-kicker").textContent = mode === "edit" ? "Edit event" : "New event";
+  $("#form-msg").textContent = "";
+  $("#btn-delete-event").hidden = mode !== "edit";
+
+  const start = ev && ev.starts_at ? new Date(ev.starts_at) : null;
+  $("#f-title").value = ev ? ev.title || "" : "";
   $("#f-category").value = ev && ev.category_id ? ev.category_id : "";
   renderCategoryPills($("#f-category").value);
-  $("#f-allday").checked = ev ? ev.all_day : false;
-  $("#f-date").value = ev ? ymd(start) : (presetDate || ymd(new Date()));
-  $("#f-start").value = ev && !ev.all_day ? hhmm(start) : "18:00";
+  $("#f-allday").checked = ev ? !!ev.all_day : false;
+  $("#f-date").value = start ? ymd(start) : (prefillDate || state.selectedDate || ymd(new Date()));
+  $("#f-start").value = start && !ev.all_day ? hhmm(start) : "18:00";
   $("#f-end").value = ev && ev.ends_at && !ev.all_day ? hhmm(new Date(ev.ends_at)) : "";
   $("#f-location").value = ev ? ev.location || "" : "";
-  $("#f-url").value = ev ? ev.url || "" : "";
-  $("#f-photo").value = ev ? ev.photo_url || "" : "";
   $("#f-desc").value = ev ? ev.description || "" : "";
-  $("#f-rsvp").checked = ev ? ev.rsvp_enabled !== false : true;
-
+  $("#f-photo").value = ev ? ev.photo_url || "" : "";
   const rr = parseRRule(ev ? ev.rrule : null);
   $("#f-freq").value = rr.freq;
   $("#f-interval").value = rr.interval;
   $("#f-until").value = ev && ev.recurrence_end ? ev.recurrence_end : "";
+  $("#f-remind").value = ev ? remindValue(ev.reminders) : "1440";
+  $("#f-rsvp").checked = ev ? ev.asks_rsvp !== false : true;
+  $("#f-bring").checked = ev ? !!ev.collects_bring_list : false;
+  syncComposerDisabled();
 
-  state.formReminders = ev
-    ? (ev.reminders || []).map((r) => r.offset_minutes)
-    : DEFAULT_REMINDER_OFFSETS.slice();
-  renderReminderList();
-  syncFormDisabled();
-  $("#dialog-form").showModal();
+  $("#composer").hidden = false;
+  requestAnimationFrame(() => $("#composer").classList.add("composer--in"));
+  setTimeout(() => $("#f-title").focus(), 60);
 }
 
-function syncFormDisabled() {
+function composerDirty() {
+  // "confirm only if something was typed" - only meaningful for a new event.
+  return state.composer.mode === "new" && $("#f-title").value.trim().length > 0;
+}
+function closeComposer(force) {
+  if (!force && composerDirty() && !confirm("Discard this event?")) return;
+  $("#composer").classList.remove("composer--in");
+  setTimeout(() => { $("#composer").hidden = true; }, 240);
+  state.composer.open = false;
+}
+function syncComposerDisabled() {
   const allday = $("#f-allday").checked;
   document.querySelectorAll(".time-only input").forEach((i) => (i.disabled = allday));
   const repeats = !!$("#f-freq").value;
   document.querySelectorAll(".repeat-only input").forEach((i) => (i.disabled = !repeats));
 }
 
-async function saveFromForm() {
+async function saveComposer() {
   const msg = $("#form-msg");
+  const fail = (t) => { msg.textContent = t; msg.scrollIntoView({ block: "center", behavior: SMOOTH }); };
   const title = $("#f-title").value.trim();
   const date = $("#f-date").value;
-  if (!title || !date) { msg.textContent = "Title and date are required."; return; }
+  if (!title || !date) { fail("Give it a title and a date."); return; }
   const allday = $("#f-allday").checked;
 
   let starts_at, ends_at = null;
@@ -666,33 +872,28 @@ async function saveFromForm() {
       ends_at = end.toISOString();
     }
   }
-
+  const remind = $("#f-remind").value;
   const payload = {
     title,
     description: $("#f-desc").value.trim() || null,
     location: $("#f-location").value.trim() || null,
-    url: $("#f-url").value.trim() || null,
     photo_url: $("#f-photo").value.trim() || null,
     category_id: $("#f-category").value || null,
-    starts_at,
-    ends_at,
-    all_day: allday,
-    rsvp_enabled: $("#f-rsvp").checked,
+    starts_at, ends_at, all_day: allday,
+    asks_rsvp: $("#f-rsvp").checked,
+    collects_bring_list: $("#f-bring").checked,
     rrule: buildRRule({ freq: $("#f-freq").value, interval: $("#f-interval").value }),
     recurrence_end: $("#f-freq").value && $("#f-until").value ? $("#f-until").value : null,
-    reminders: state.formReminders,
+    reminders: remind ? [Number(remind)] : [],
   };
 
   $("#btn-save-event").disabled = true;
   try {
-    await saveEvent(payload, state.editingId);
-    $("#dialog-form").close();
+    await saveEvent(payload, state.composer.eventId);
+    closeComposer(true);
     await loadData();
-  } catch (e) {
-    msg.textContent = friendly(e);
-  } finally {
-    $("#btn-save-event").disabled = false;
-  }
+  } catch (e) { fail(friendly(e)); }
+  finally { $("#btn-save-event").disabled = false; }
 }
 
 // ---------- categories ----------
@@ -734,53 +935,28 @@ function openCategories() {
   $("#dialog-categories").showModal();
 }
 
-// ---------- jump / filter ----------
-function openJump() {
-  const list = $("#jump-list");
-  list.innerHTML = "";
-  const seen = new Set();
-  for (const ws of state.weeks) {
-    const key = weekMonthKey(ws);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const b = el("button", null, monthName(key, true));
-    b.type = "button";
-    b.onclick = () => {
-      $("#dialog-jump").close();
-      const node = document.querySelector(`#weeks .week[data-month-key="${key}"]`);
-      if (node) scrollElIntoView(node);
-    };
-    list.appendChild(b);
+function exportIcs() {
+  const dt = (d) => d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+  const esc = (s) => String(s).replace(/([,;\\])/g, "\\$1").replace(/\n/g, "\\n");
+  const now = new Date();
+  const from = new Date(now.getTime() - 90 * 86400000);
+  const to = new Date(now.getTime() + 365 * 86400000);
+  const occ = expandAll(state.events, from, to);
+  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Connection Group Calendar//EN"];
+  for (const o of occ) {
+    const end = o.end || new Date(o.start.getTime() + 3600000);
+    lines.push("BEGIN:VEVENT",
+      `UID:${o.event.id}-${o.date}@connection-group`, `DTSTAMP:${dt(now)}`,
+      `DTSTART:${dt(o.start)}`, `DTEND:${dt(end)}`, `SUMMARY:${esc(o.overrideTitle || o.event.title)}`);
+    if (o.event.location) lines.push(`LOCATION:${esc(o.event.location)}`);
+    lines.push("END:VEVENT");
   }
-  $("#dialog-jump").showModal();
-}
-
-function openFilter() {
-  const list = $("#filter-list");
-  list.innerHTML = "";
-  const entries = [...state.categories.map((c) => ({ id: c.id, name: c.name, color: c.color })),
-    { id: "__none__", name: "Uncategorized", color: "#7d5411" }];
-  for (const e of entries) {
-    const row = el("button", "filter-row");
-    row.type = "button";
-    const on = !state.hidden.has(e.id);
-    row.setAttribute("aria-pressed", on ? "true" : "false");
-    row.innerHTML =
-      `<span class="dot" style="background:${e.color}"></span>` +
-      `<span>${escapeHtml(e.name)}</span>` +
-      `<span class="state">${on ? "shown" : "hidden"}</span>`;
-    row.onclick = () => {
-      if (state.hidden.has(e.id)) state.hidden.delete(e.id);
-      else state.hidden.add(e.id);
-      localStorage.setItem(HIDDEN_KEY, JSON.stringify([...state.hidden]));
-      const nowOn = !state.hidden.has(e.id);
-      row.setAttribute("aria-pressed", nowOn ? "true" : "false");
-      row.querySelector(".state").textContent = nowOn ? "shown" : "hidden";
-      renderWeeks();
-    };
-    list.appendChild(row);
-  }
-  $("#dialog-filter").showModal();
+  lines.push("END:VCALENDAR");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([lines.join("\r\n")], { type: "text/calendar" }));
+  a.download = "connection-group-calendar.ics";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 
 // ---------- auth ----------
@@ -796,8 +972,8 @@ async function refreshAuthUI() {
       : "This email is not on the admin list, so editing will be blocked. Ask an admin to add it.";
   }
   $("#btn-admin").textContent = state.isAdmin ? "Admin ✓" : "Admin";
+  document.body.classList.toggle("admin", state.isAdmin);
 }
-
 async function computeIsAdmin() {
   if (!isEmailUser(state.session)) { state.isAdmin = false; return; }
   try {
@@ -805,9 +981,7 @@ async function computeIsAdmin() {
     if (error) { state.isAdmin = false; return; }
     const mine = state.session.user.email.toLowerCase();
     state.isAdmin = (data || []).some((r) => r.email.toLowerCase() === mine);
-  } catch {
-    state.isAdmin = false;
-  }
+  } catch { state.isAdmin = false; }
 }
 
 // ---------- reminders (push) ----------
@@ -821,9 +995,7 @@ async function toggleReminders() {
     if (st.subscribed) { await pushUnsubscribe(); setStatus("Reminders turned off on this device."); }
     else { await pushSubscribe(); setStatus("Reminders are on for this device."); }
     await refreshRemindersButton();
-  } catch (e) {
-    alert(friendly(e));
-  }
+  } catch (e) { alert(friendly(e)); }
 }
 async function refreshRemindersButton() {
   const btn = $("#btn-reminders");
@@ -835,29 +1007,23 @@ async function refreshRemindersButton() {
 
 // ---------- misc ----------
 function hhmm(d) {
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: GROUP_TIMEZONE, hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-  }).format(d);
+  return new Intl.DateTimeFormat("en-GB", { timeZone: GROUP_TIMEZONE, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(d);
 }
-
 function openDeepLinkedEvent() {
   const id = new URLSearchParams(location.search).get("event");
   if (!id) return;
   const ev = state.events.find((e) => e.id === id);
   if (!ev) return;
   const start = new Date(ev.starts_at);
-  openEvent({
-    event: ev, start, end: ev.ends_at ? new Date(ev.ends_at) : null,
-    date: ymd(start), recurring: !!ev.rrule,
-  });
+  openEvent({ event: ev, start, end: ev.ends_at ? new Date(ev.ends_at) : null, date: ymd(start), recurring: !!ev.rrule });
 }
 
 // ---------- init ----------
 async function init() {
   state.todayStr = ymd(new Date());
-  state.curWeekStart = startOfWeek(state.todayStr);
-  state.nextWeekStart = addDays(state.curWeekStart, 7);
-  state.weeks = Array.from({ length: 8 }, (_, i) => addDays(state.curWeekStart, i * 7));
+  state.selectedDate = state.todayStr;
+  const [ty, tm] = state.todayStr.split("-").map(Number);
+  state.visible = { year: ty, month: tm };
   setStatus("");
 
   if ("serviceWorker" in navigator) {
@@ -878,38 +1044,74 @@ async function init() {
     await computeIsAdmin();
     await refreshAuthUI();
     await loadRsvpData();
-    renderWeeks();
-    if (location.hash.includes("access_token")) {
-      history.replaceState(null, "", location.pathname + location.search);
-    }
+    renderAll();
+    if (location.hash.includes("access_token")) history.replaceState(null, "", location.pathname + location.search);
   });
 
-  // rolling-weeks nav
-  $("#btn-earlier").onclick = loadEarlier;
-  $("#btn-jump").onclick = openJump;
-  $("#btn-filter").onclick = openFilter;
+  // month nav
+  $("#btn-prev").onclick = () => goMonth(-1);
+  $("#btn-next").onclick = () => goMonth(1);
+  $("#btn-today").onclick = () => { state.visible = { year: ty, month: tm }; state.selectedDate = state.todayStr; state.focusedKey = null; renderAll(); };
 
-  let ticking = false;
-  window.addEventListener("scroll", () => {
-    if (ticking) return;
-    ticking = true;
-    requestAnimationFrame(() => { ticking = false; updateMonthBar(); });
+  // grid swipe (mobile) -> month change
+  let tx = 0, ty0 = 0;
+  const grid = $("#grid");
+  grid.addEventListener("touchstart", (e) => { tx = e.changedTouches[0].clientX; ty0 = e.changedTouches[0].clientY; }, { passive: true });
+  grid.addEventListener("touchend", (e) => {
+    const dx = e.changedTouches[0].clientX - tx, dy = e.changedTouches[0].clientY - ty0;
+    if (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.5) goMonth(dx < 0 ? 1 : -1);
   }, { passive: true });
 
-  new IntersectionObserver((entries) => {
-    if (entries.some((e) => e.isIntersecting)) appendWeeks();
-  }, { rootMargin: "800px 0px" }).observe($("#sentinel"));
-
-  // dialogs: keep Enter inside a field from submitting-and-closing
-  $("#form-event").addEventListener("submit", (e) => {
-    if (e.submitter && e.submitter.value === "close") return;
-    e.preventDefault();
+  // re-render on breakpoint cross
+  let wasDesktop = isDesktop();
+  window.addEventListener("resize", () => {
+    const now = isDesktop();
+    if (now !== wasDesktop) { wasDesktop = now; renderAll(); }
   });
+
+  // composer
+  $("#btn-new-event").onclick = () => openComposer("new", null, state.selectedDate);
+  $("#composer-close").onclick = () => closeComposer(false);
+  $("#btn-cancel-event").onclick = () => closeComposer(false);
+  $("#btn-save-event").onclick = saveComposer;
+  $("#btn-delete-event").onclick = async () => {
+    if (!state.composer.eventId) return;
+    if (!confirm("Delete this event and all its occurrences?")) return;
+    try { await deleteEvent(state.composer.eventId); closeComposer(true); await loadData(); }
+    catch (e) { $("#form-msg").textContent = friendly(e); }
+  };
+  $("#f-allday").onchange = syncComposerDisabled;
+  $("#f-freq").onchange = syncComposerDisabled;
+  $("#form-event").addEventListener("submit", (e) => e.preventDefault());
+  document.addEventListener("keydown", (e) => {
+    if (!state.composer.open) return;
+    if (e.key === "Escape") { e.preventDefault(); closeComposer(false); }
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); saveComposer(); }
+  });
+
+  // rails / links
+  $("#lnk-categories").onclick = openCategories;
+  $("#lnk-admins").onclick = () => $("#dialog-auth").showModal();
+  $("#lnk-export").onclick = exportIcs;
+
+  // admin dialog
+  $("#btn-admin").onclick = () => $("#dialog-auth").showModal();
   $("#form-auth").addEventListener("submit", (e) => {
     if (e.submitter && e.submitter.value === "close") return;
     e.preventDefault();
     $("#btn-send-link").click();
   });
+  $("#btn-send-link").onclick = async () => {
+    const email = $("#auth-email").value.trim();
+    if (!email) return;
+    $("#auth-msg").textContent = "Sending...";
+    try { await sendMagicLink(email); $("#auth-msg").textContent = "Check your email for the sign-in link."; }
+    catch (e) { $("#auth-msg").textContent = friendly(e); }
+  };
+  $("#btn-sign-out").onclick = async () => { await signOut(); $("#dialog-auth").close(); };
+  $("#btn-manage-categories").onclick = () => { $("#dialog-auth").close(); openCategories(); };
+
+  // name dialog
   $("#form-name").addEventListener("submit", (e) => {
     const ok = e.submitter && e.submitter.value === "ok";
     const val = $("#name-input").value.trim();
@@ -921,39 +1123,11 @@ async function init() {
     if (nameResolver) { const r = nameResolver; nameResolver = null; r(null); }
   });
 
-  // admin dialog
-  $("#btn-admin").onclick = () => $("#dialog-auth").showModal();
-  $("#btn-send-link").onclick = async () => {
-    const email = $("#auth-email").value.trim();
-    if (!email) return;
-    $("#auth-msg").textContent = "Sending...";
-    try { await sendMagicLink(email); $("#auth-msg").textContent = "Check your email for the sign-in link."; }
-    catch (e) { $("#auth-msg").textContent = friendly(e); }
-  };
-  $("#btn-sign-out").onclick = async () => { await signOut(); $("#dialog-auth").close(); };
-  $("#btn-new-event").onclick = () => { $("#dialog-auth").close(); openForm(null, null); };
-  $("#btn-manage-categories").onclick = () => { $("#dialog-auth").close(); openCategories(); };
-
-  // event form
-  $("#f-allday").onchange = syncFormDisabled;
-  $("#f-freq").onchange = syncFormDisabled;
-  $("#btn-add-reminder").onclick = () => {
-    const amt = parseInt($("#r-amount").value, 10);
-    const unit = parseInt($("#r-unit").value, 10);
-    if (!amt || amt < 1) return;
-    const mins = amt * unit;
-    if (!state.formReminders.includes(mins)) state.formReminders.push(mins);
-    renderReminderList();
-  };
-  $("#btn-save-event").onclick = saveFromForm;
-
   // reminders
   $("#btn-reminders").onclick = toggleReminders;
   refreshRemindersButton();
 
   await loadData();
-  scrollToWeek(state.curWeekStart, "auto");
-  updateMonthBar();
   openDeepLinkedEvent();
 }
 

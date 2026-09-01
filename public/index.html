@@ -10,42 +10,131 @@
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500;600&family=Lora:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500;600&family=Lora:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <header class="app-header">
-    <p class="kicker kicker--accent">MERCY HILL &middot; KENNEDY AVE</p>
-    <div class="app-header__row">
-      <h1 class="app-title">Connection Group</h1>
-      <div class="app-header__actions">
-        <button id="btn-reminders" class="linkbtn" type="button">Reminders</button>
-        <button id="btn-admin" class="linkbtn linkbtn--faint" type="button">Admin</button>
-      </div>
+  <header class="topbar">
+    <div class="topbar__id">
+      <p class="kicker kicker--accent">MERCY HILL &middot; KENNEDY AVE</p>
+      <h1 class="topbar__title">Connection Group</h1>
+    </div>
+    <div class="topbar__actions">
+      <button id="btn-reminders" class="linkbtn" type="button">Reminders</button>
+      <span id="group-count" class="topbar__meta"></span>
+      <span class="topbar__sep"></span>
+      <button id="btn-new-event" class="btn btn--primary" type="button">+ New event</button>
+      <button id="btn-admin" class="linkbtn linkbtn--faint" type="button">Admin</button>
     </div>
   </header>
 
-  <div class="monthbar" id="monthbar">
-    <span class="monthbar__name" id="month-name">&nbsp;</span>
-    <span class="monthbar__actions">
-      <button id="btn-filter" class="kicker kicker--btn" type="button">FILTER</button>
-      <button id="btn-jump" class="kicker kicker--btn" type="button">JUMP TO MONTH</button>
-    </span>
+  <div class="layout">
+    <aside class="rail rail--left">
+      <p class="kicker">Categories</p>
+      <div id="cat-rail" class="cat-rail"></div>
+      <div class="rail__rule"></div>
+      <p class="kicker">Needs you</p>
+      <p id="needs-you" class="rail__needs"></p>
+      <div class="rail__rule"></div>
+      <nav class="rail__links">
+        <button id="lnk-categories" class="rail__link" type="button">Manage categories</button>
+        <button id="lnk-admins" class="rail__link" type="button">Admins &amp; members</button>
+        <button id="lnk-export" class="rail__link" type="button">Export to Google Cal</button>
+      </nav>
+    </aside>
+
+    <main class="cal">
+      <div class="monthbar">
+        <h2 id="month-label" class="monthbar__label">&nbsp;</h2>
+        <div class="monthbar__nav">
+          <button id="btn-prev" class="navsq" type="button" aria-label="Previous month">&#8249;</button>
+          <button id="btn-next" class="navsq" type="button" aria-label="Next month">&#8250;</button>
+          <button id="btn-today" class="today-pill" type="button" hidden>Today</button>
+        </div>
+        <p class="monthbar__hint">Click any day to add &middot; drag an event to move it</p>
+      </div>
+      <div id="weekhead" class="weekhead"></div>
+      <div id="grid" class="grid" role="grid"></div>
+      <section id="daysection" class="daysection"></section>
+      <p id="nextup" class="nextup"></p>
+      <p id="status-line" class="status-line" role="status"></p>
+    </main>
+
+    <aside id="weekrail" class="rail rail--right"></aside>
   </div>
 
-  <main>
-    <button id="btn-earlier" class="earlier" type="button">&#9650; Earlier</button>
-    <div id="weeks" class="weeks"></div>
-    <div id="sentinel" aria-hidden="true"></div>
-    <p id="status-line" class="status-line" role="status"></p>
-  </main>
+  <!-- Composer: slide-in panel, not a modal -->
+  <section id="composer" class="composer" hidden aria-label="Event composer">
+    <form id="form-event">
+      <div class="composer__head">
+        <p id="composer-kicker" class="kicker kicker--accent">New event</p>
+        <button id="composer-close" class="btn btn--icon" type="button" aria-label="Close">&times;</button>
+      </div>
 
-  <!-- Event detail + RSVP -->
+      <input id="f-title" class="composer__title" type="text" maxlength="200" placeholder="Untitled event" />
+
+      <div id="f-category-pills" class="pillrow" role="radiogroup" aria-label="Category"></div>
+      <input id="f-category" type="hidden" />
+
+      <div class="field-row">
+        <label class="field field--grow"><span>Date</span><input id="f-date" type="date" required /></label>
+        <label class="field time-only"><span>Start</span><input id="f-start" type="time" /></label>
+        <label class="field time-only"><span>End</span><input id="f-end" type="time" /></label>
+      </div>
+
+      <label class="field field--check">
+        <input id="f-allday" type="checkbox" /><span>All day</span>
+      </label>
+
+      <label class="field"><span>Where</span><input id="f-location" type="text" maxlength="200" /></label>
+      <label class="field"><span>Note to the group</span><textarea id="f-desc" rows="2" maxlength="2000"></textarea></label>
+      <label class="field"><span>Photo URL (optional)</span><input id="f-photo" type="url" placeholder="https://..." /></label>
+
+      <div class="field-row">
+        <label class="field field--grow">
+          <span>Repeats</span>
+          <select id="f-freq">
+            <option value="">Doesn't repeat</option>
+            <option value="DAILY">Daily</option>
+            <option value="WEEKLY">Weekly</option>
+            <option value="MONTHLY">Monthly</option>
+          </select>
+        </label>
+        <label class="field repeat-only"><span>Every</span><input id="f-interval" type="number" min="1" max="52" value="1" /></label>
+        <label class="field repeat-only"><span>Until</span><input id="f-until" type="date" /></label>
+      </div>
+
+      <label class="field">
+        <span>Remind</span>
+        <select id="f-remind">
+          <option value="">No reminder</option>
+          <option value="15">15 minutes before</option>
+          <option value="60">1 hour before</option>
+          <option value="1440" selected>1 day before</option>
+          <option value="2880">2 days before</option>
+        </select>
+      </label>
+
+      <label class="field field--check"><input id="f-rsvp" type="checkbox" checked /><span>Ask for RSVPs</span></label>
+      <label class="field field--check"><input id="f-bring" type="checkbox" /><span>Collect a bring-list</span></label>
+
+      <p id="form-msg" class="form-msg"></p>
+
+      <div class="composer__foot">
+        <button id="btn-delete-event" class="btn-text-danger" type="button" hidden>Delete</button>
+        <button id="btn-save-event" class="btn btn--primary" type="button">Save event</button>
+        <button id="btn-cancel-event" class="btn" type="button">Cancel</button>
+        <span class="composer__hint">&#8984;&#8629; to save</span>
+      </div>
+    </form>
+  </section>
+
+  <!-- Mobile event detail + RSVP -->
   <dialog id="dialog-event" class="sheet">
     <div id="event-scroll" class="sheet__scroll"></div>
   </dialog>
 
-  <!-- Sign in -->
+  <!-- Admin sign in -->
   <dialog id="dialog-auth" class="dialog">
     <form id="form-auth" method="dialog">
       <div class="dialog__head">
@@ -54,8 +143,7 @@
       </div>
       <div id="auth-signed-out">
         <p class="muted">Enter your admin email. We'll send a one-time sign-in link.</p>
-        <label class="field">
-          <span>Email</span>
+        <label class="field"><span>Email</span>
           <input id="auth-email" type="email" autocomplete="email" required placeholder="you@example.com" />
         </label>
         <p id="auth-msg" class="muted"></p>
@@ -67,115 +155,9 @@
         <p>Signed in as <strong id="auth-who"></strong>.</p>
         <p id="auth-admin-note" class="muted"></p>
         <div class="dialog__foot">
-          <button id="btn-new-event" class="btn btn--primary" type="button">New event</button>
           <button id="btn-manage-categories" class="btn" type="button">Categories</button>
           <button id="btn-sign-out" class="btn" type="button">Sign out</button>
         </div>
-      </div>
-    </form>
-  </dialog>
-
-  <!-- Event editor (admin) -->
-  <dialog id="dialog-form" class="sheet">
-    <form id="form-event" method="dialog" class="sheet__scroll">
-      <div class="dialog__head">
-        <h3 id="form-title">New event</h3>
-        <button class="btn btn--icon" value="close" aria-label="Close" type="submit" formnovalidate>&times;</button>
-      </div>
-
-      <label class="field">
-        <span>Title</span>
-        <input id="f-title" class="field__title" type="text" required maxlength="200" />
-      </label>
-
-      <label class="field">
-        <span>Category</span>
-        <div id="f-category-pills" class="pillrow" role="radiogroup" aria-label="Category"></div>
-        <input id="f-category" type="hidden" />
-      </label>
-
-      <label class="field field--check">
-        <input id="f-allday" type="checkbox" />
-        <span>All day</span>
-      </label>
-
-      <div class="field-row">
-        <label class="field">
-          <span>Date</span>
-          <input id="f-date" type="date" required />
-        </label>
-        <label class="field time-only">
-          <span>Start</span>
-          <input id="f-start" type="time" />
-        </label>
-        <label class="field time-only">
-          <span>End</span>
-          <input id="f-end" type="time" />
-        </label>
-      </div>
-
-      <label class="field">
-        <span>Location</span>
-        <input id="f-location" type="text" maxlength="200" />
-      </label>
-      <label class="field">
-        <span>Link (optional)</span>
-        <input id="f-url" type="url" placeholder="https://..." />
-      </label>
-      <label class="field">
-        <span>Photo URL (optional)</span>
-        <input id="f-photo" type="url" placeholder="https://..." />
-      </label>
-      <label class="field">
-        <span>Description</span>
-        <textarea id="f-desc" rows="3" maxlength="2000"></textarea>
-      </label>
-      <label class="field field--check">
-        <input id="f-rsvp" type="checkbox" checked />
-        <span>Ask for RSVPs</span>
-      </label>
-
-      <fieldset class="fieldset">
-        <legend>Repeat</legend>
-        <div class="field-row">
-          <label class="field">
-            <span>Frequency</span>
-            <select id="f-freq">
-              <option value="">Does not repeat</option>
-              <option value="DAILY">Daily</option>
-              <option value="WEEKLY">Weekly</option>
-              <option value="MONTHLY">Monthly</option>
-            </select>
-          </label>
-          <label class="field repeat-only">
-            <span>Every</span>
-            <input id="f-interval" type="number" min="1" max="52" value="1" />
-          </label>
-          <label class="field repeat-only">
-            <span>Until (optional)</span>
-            <input id="f-until" type="date" />
-          </label>
-        </div>
-      </fieldset>
-
-      <fieldset class="fieldset">
-        <legend>Reminders</legend>
-        <div id="reminder-list" class="reminder-list"></div>
-        <div class="reminder-add">
-          <input id="r-amount" type="number" min="1" value="1" />
-          <select id="r-unit">
-            <option value="1">minutes</option>
-            <option value="60">hours</option>
-            <option value="1440" selected>days</option>
-          </select>
-          <button id="btn-add-reminder" class="btn" type="button">Add reminder</button>
-        </div>
-      </fieldset>
-
-      <p id="form-msg" class="muted"></p>
-      <div class="sheet__foot">
-        <button class="btn" value="close" type="submit" formnovalidate>Cancel</button>
-        <button id="btn-save-event" class="btn btn--primary" type="button">Save</button>
       </div>
     </form>
   </dialog>
@@ -204,36 +186,13 @@
         <button class="btn btn--icon" value="cancel" aria-label="Close" type="submit" formnovalidate>&times;</button>
       </div>
       <p class="muted">So the group can see who's coming. You'll only be asked once.</p>
-      <label class="field">
-        <span>Name</span>
+      <label class="field"><span>Name</span>
         <input id="name-input" type="text" maxlength="60" autocomplete="name" required placeholder="First name & last initial" />
       </label>
       <div class="dialog__foot">
         <button class="btn" value="cancel" type="submit" formnovalidate>Cancel</button>
         <button id="btn-name-save" class="btn btn--primary" value="ok" type="submit">Save</button>
       </div>
-    </form>
-  </dialog>
-
-  <!-- Jump to month -->
-  <dialog id="dialog-jump" class="dialog">
-    <form method="dialog">
-      <div class="dialog__head">
-        <h3>Jump to month</h3>
-        <button class="btn btn--icon" value="close" aria-label="Close">&times;</button>
-      </div>
-      <div id="jump-list" class="jump-list"></div>
-    </form>
-  </dialog>
-
-  <!-- Filter -->
-  <dialog id="dialog-filter" class="dialog">
-    <form method="dialog">
-      <div class="dialog__head">
-        <h3>Show categories</h3>
-        <button class="btn btn--icon" value="close" aria-label="Close">&times;</button>
-      </div>
-      <div id="filter-list" class="filter-list"></div>
     </form>
   </dialog>
 

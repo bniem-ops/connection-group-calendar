@@ -70,6 +70,12 @@ export async function deleteEvent(id) {
   if (error) throw error;
 }
 
+// Move an event (drag-to-reschedule): patch starts_at / ends_at only.
+export async function updateEventTiming(id, patch) {
+  const { error } = await supabase.from("events").update(patch).eq("id", id);
+  if (error) throw error;
+}
+
 export async function cancelOccurrence(eventId, occurrenceDate) {
   const { error } = await supabase
     .from("event_exceptions")
