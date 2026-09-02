@@ -66,10 +66,12 @@ function encodePNG({ w, h, buf }) {
 }
 
 // ---- the icon artwork (coords on a 512 grid, scaled to size) ----
-const BLUE = [37, 99, 235];
-const DARK = [30, 64, 175];
-const WHITE = [255, 255, 255];
-const CELL = [147, 197, 253];
+// Classical palette - matches public/styles.css accent ramp.
+const GROUND = [182, 130, 53];   // #b68235 accent
+const INK = [125, 84, 17];       // #7d5411 accent-700
+const PAPER = [250, 249, 248];   // #faf9f8 card
+const CELL = [225, 173, 102];    // #e1ad66 accent-400
+const ACCENT = [90, 59, 10];     // #5a3b0a accent-800
 
 function draw(size, pad = 0) {
   const c = Canvas(size, size);
@@ -78,18 +80,18 @@ function draw(size, pad = 0) {
   const inner = size - P * 2;
   const sc = (n) => P + n * (inner / 512);
 
-  c.fill(0, 0, size, size, BLUE);                    // background
-  c.fill(sc(96), sc(120), sc(320), sc(296), WHITE);  // calendar body
-  c.fill(sc(96), sc(120), sc(320), sc(72), DARK);    // header band
-  c.fill(sc(160), sc(96), sc(32), sc(40), DARK);     // left binder tab
-  c.fill(sc(320), sc(96), sc(32), sc(40), DARK);     // right binder tab
+  c.fill(0, 0, size, size, GROUND);                  // background
+  c.fill(sc(96), sc(120), sc(320), sc(296), PAPER);  // calendar body
+  c.fill(sc(96), sc(120), sc(320), sc(72), INK);     // header band
+  c.fill(sc(160), sc(96), sc(32), sc(40), INK);      // left binder tab
+  c.fill(sc(320), sc(96), sc(32), sc(40), INK);      // right binder tab
 
   const cols = [132, 200, 268, 336];
   const rows = [224, 288, 352];
   for (const ry of rows) {
     for (const cx of cols) {
       const isAccent = ry === 352 && cx === 336;
-      c.fill(sc(cx), sc(ry), sc(48), sc(40), isAccent ? BLUE : CELL);
+      c.fill(sc(cx), sc(ry), sc(48), sc(40), isAccent ? ACCENT : CELL);
     }
   }
   return encodePNG(c);
