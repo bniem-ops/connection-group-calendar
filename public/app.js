@@ -10,6 +10,7 @@ import {
   fetchRsvps, fetchMembers, setDisplayName, setRsvp, clearRsvp,
 } from "./lib/events.js";
 import { expandAll, buildRRule } from "./lib/recurrence.js";
+import { fetchMessages, sendMessage, removeMessage, subscribeMessages } from "./lib/chat.js";
 import { monthGridDays, weekOf, addDays, startOfWeek } from "./lib/calendar.js";
 import {
   getSession, onAuthChange, sendMagicLink, signOut, isEmailUser, ensureAnonSession,
@@ -18,10 +19,11 @@ import {
   pushSupported, getStatus as pushStatus, subscribe as pushSubscribe,
   unsubscribe as pushUnsubscribe,
 } from "./lib/push.js";
-import { fieldsToInstant, ymd, zonedParts } from "./lib/tz.js";
+import { fieldsToInstant, ymd, zonedParts, formatTime } from "./lib/tz.js";
 
 const $ = (s) => document.querySelector(s);
 const HIDDEN_KEY = "gc.hiddenCategories";
+const CHAT_SEEN_KEY = "gc.chatLastSeen";
 const SMOOTH = matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
 const isDesktop = () => matchMedia("(min-width: 1100px)").matches;
 
@@ -47,6 +49,7 @@ const state = {
   hidden: new Set(JSON.parse(localStorage.getItem(HIDDEN_KEY) || "[]")),
 
   composer: { open: false, mode: "new", eventId: null },
+  chat: { open: false, loaded: false, msgs: [], unsub: null },
 };
 
 // ---------- helpers ----------
@@ -768,6 +771,155 @@ function promptName() {
   return new Promise((resolve) => { nameResolver = resolve; $("#name-input").value = ""; $("#dialog-name").showModal(); });
 }
 
+// ---------- group chat ----------
+function chatDayLabel(d) {
+  return new Intl.DateTimeFormat(undefined, { timeZone: GROUP_TIMEZONE, weekday: "long", month: "long", day: "numeric" }).format(d);
+}
+
+function mergeMsg(row) {
+  let i = state.chat.msgs.findIndex((m) => m.id === row.id);
+  if (i < 0) i = state.chat.msgs.findIndex((m) => m._pending && m.user_id === row.user_id && m.body === row.body);
+  if (i >= 0) state.chat.msgs[i] = { ...state.chat.msgs[i], ...row, _pending: false };
+  else state.chat.msgs.push(row);
+  state.chat.msgs.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+}
+
+function renderChatLog() {
+  const log = $("#chat-log");
+  log.innerHTML = "";
+  if (!state.chat.msgs.length) {
+    log.appendChild(el("p", "chat-empty", "No messages yet. Say hi."));
+    return;
+  }
+  let lastDay = "";
+  for (const m of state.chat.msgs) {
+    const dt = new Date(m.created_at);
+    const day = ymd(dt);
+    if (day !== lastDay) { log.appendChild(el("div", "chatlog__day", chatDayLabel(dt))); lastDay = day; }
+    log.appendChild(renderMsg(m));
+  }
+  log.scrollTop = log.scrollHeight;
+}
+
+function renderMsg(m) {
+  const mine = m.user_id === state.myUserId;
+  const wrap = el("div", "msg" + (mine ? " msg--mine" : ""));
+  wrap.dataset.id = m.id;
+  const name = mine ? "You" : (m.display_name || state.members.get(m.user_id) || "Someone");
+  const meta = el("div", "msg__meta");
+  meta.innerHTML = `<b>${escapeHtml(name)}</b> · ${escapeHtml(formatTime(new Date(m.created_at)))}` +
+    (m.edited_at ? " · edited" : "") + (m._pending ? " · sending…" : "") + (m._failed ? " · failed" : "");
+  wrap.appendChild(meta);
+  if (m.deleted_at) {
+    wrap.appendChild(el("div", "msg__body msg__body--gone", "message removed"));
+  } else {
+    wrap.appendChild(el("div", "msg__body", m.body));
+    if ((mine || state.isAdmin) && !m._pending) {
+      const del = el("button", "msg__del", "delete");
+      del.type = "button";
+      del.onclick = async () => {
+        if (!confirm("Delete this message?")) return;
+        try { await removeMessage(m.id); m.deleted_at = new Date().toISOString(); renderChatLog(); }
+        catch (e) { alert(friendly(e)); }
+      };
+      meta.appendChild(del);
+    }
+  }
+  return wrap;
+}
+
+function markChatSeen() {
+  const last = state.chat.msgs[state.chat.msgs.length - 1];
+  if (last && !String(last.id).startsWith("temp-")) {
+    try { localStorage.setItem(CHAT_SEEN_KEY, last.created_at); } catch { /* ignore */ }
+  }
+  $("#chat-dot").hidden = true;
+}
+
+async function loadChat() {
+  try {
+    state.chat.msgs = await fetchMessages(150);
+    state.chat.loaded = true;
+  } catch (e) { console.warn("chat load failed", e); }
+  renderChatLog();
+  if (state.chat.open) markChatSeen();
+}
+
+function startChatRealtime() {
+  if (state.chat.unsub || !state.myUserId) return;
+  state.chat.unsub = subscribeMessages({
+    onInsert: async (row) => {
+      if (!state.members.has(row.user_id)) {
+        try { state.members = await fetchMembers(); } catch { /* ignore */ }
+      }
+      row.display_name = state.members.get(row.user_id) || null;
+      mergeMsg(row);
+      if (state.chat.open) { renderChatLog(); markChatSeen(); }
+      else if (row.user_id !== state.myUserId) $("#chat-dot").hidden = false;
+    },
+    onUpdate: (row) => {
+      const m = state.chat.msgs.find((x) => x.id === row.id);
+      if (!m) return;
+      m.body = row.body; m.edited_at = row.edited_at; m.deleted_at = row.deleted_at;
+      if (state.chat.open) renderChatLog();
+    },
+  });
+}
+
+async function checkChatUnread() {
+  if (!state.myUserId) return;
+  try {
+    const { data } = await supabase
+      .from("messages").select("created_at, user_id")
+      .order("created_at", { ascending: false }).limit(1);
+    const newest = data && data[0];
+    if (!newest) return;
+    let seen = null;
+    try { seen = localStorage.getItem(CHAT_SEEN_KEY); } catch { /* ignore */ }
+    if (newest.user_id !== state.myUserId && (!seen || newest.created_at > seen)) $("#chat-dot").hidden = false;
+  } catch { /* ignore */ }
+}
+
+function openChat() {
+  state.chat.open = true;
+  $("#chat").hidden = false;
+  requestAnimationFrame(() => $("#chat").classList.add("chatpanel--in"));
+  if (!state.chat.loaded) loadChat();
+  else { renderChatLog(); markChatSeen(); }
+  startChatRealtime();
+  setTimeout(() => $("#chat-input").focus(), 80);
+}
+function closeChat() {
+  state.chat.open = false;
+  $("#chat").classList.remove("chatpanel--in");
+  setTimeout(() => { $("#chat").hidden = true; }, 240);
+}
+
+async function sendChat() {
+  const input = $("#chat-input");
+  const body = input.value.trim();
+  if (!body) return;
+  if (!(await ensureMember())) { alert("Set a display name first so the group knows who's talking."); return; }
+  input.value = "";
+  input.style.height = "auto";
+  const temp = {
+    id: `temp-${Date.now()}`, body, created_at: new Date().toISOString(),
+    user_id: state.myUserId, display_name: state.members.get(state.myUserId) || "You", _pending: true,
+  };
+  state.chat.msgs.push(temp);
+  renderChatLog();
+  try {
+    const saved = await sendMessage(state.myUserId, body);
+    mergeMsg({ ...saved, display_name: state.members.get(state.myUserId) || null });
+    renderChatLog();
+    markChatSeen();
+  } catch (e) {
+    temp._pending = false; temp._failed = true;
+    renderChatLog();
+    alert(friendly(e));
+  }
+}
+
 // ---------- composer (Screen 4 / mobile Add) ----------
 function parseRRule(rrule) {
   const out = { freq: "", interval: 1 };
@@ -1084,9 +1236,22 @@ async function init() {
   $("#f-freq").onchange = syncComposerDisabled;
   $("#form-event").addEventListener("submit", (e) => e.preventDefault());
   document.addEventListener("keydown", (e) => {
+    if (state.chat.open && e.key === "Escape") { e.preventDefault(); closeChat(); return; }
     if (!state.composer.open) return;
     if (e.key === "Escape") { e.preventDefault(); closeComposer(false); }
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); saveComposer(); }
+  });
+
+  // chat
+  $("#btn-chat").onclick = () => (state.chat.open ? closeChat() : openChat());
+  $("#chat-close").onclick = closeChat;
+  $("#chat-form").addEventListener("submit", (e) => { e.preventDefault(); sendChat(); });
+  $("#chat-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  });
+  $("#chat-input").addEventListener("input", (e) => {
+    e.target.style.height = "auto";
+    e.target.style.height = Math.min(120, e.target.scrollHeight) + "px";
   });
 
   // rails / links
@@ -1129,6 +1294,10 @@ async function init() {
 
   await loadData();
   openDeepLinkedEvent();
+
+  // chat: passive unread badge + live subscription for the session
+  checkChatUnread();
+  startChatRealtime();
 }
 
 window.__gc = state;

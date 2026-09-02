@@ -1,6 +1,6 @@
 /* Group Calendar service worker: offline shell cache + Web Push handling. */
 
-const CACHE = "gc-shell-v4";
+const CACHE = "gc-shell-v5";
 const SHELL = [
   "./",
   "./index.html",
@@ -16,6 +16,7 @@ const SHELL = [
   "./lib/auth.js",
   "./lib/push.js",
   "./lib/calendar.js",
+  "./lib/chat.js",
 ];
 
 self.addEventListener("install", (event) => {

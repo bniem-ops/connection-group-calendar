@@ -20,6 +20,7 @@
       <h1 class="topbar__title">Connection Group</h1>
     </div>
     <div class="topbar__actions">
+      <button id="btn-chat" class="linkbtn" type="button">Chat<span id="chat-dot" class="dot-badge" hidden></span></button>
       <button id="btn-reminders" class="linkbtn" type="button">Reminders</button>
       <span id="group-count" class="topbar__meta"></span>
       <span class="topbar__sep"></span>
@@ -62,6 +63,19 @@
 
     <aside id="weekrail" class="rail rail--right"></aside>
   </div>
+
+  <!-- Group chat: slide-in panel -->
+  <section id="chat" class="chatpanel" hidden aria-label="Group chat">
+    <div class="chatpanel__head">
+      <p class="kicker kicker--accent">Group chat</p>
+      <button id="chat-close" class="btn btn--icon" type="button" aria-label="Close">&times;</button>
+    </div>
+    <div id="chat-log" class="chatlog" aria-live="polite"></div>
+    <form id="chat-form" class="chatbar">
+      <textarea id="chat-input" rows="1" maxlength="2000" placeholder="Message the group" aria-label="Message"></textarea>
+      <button id="chat-send" class="btn btn--primary" type="submit">Send</button>
+    </form>
+  </section>
 
   <!-- Composer: slide-in panel, not a modal -->
   <section id="composer" class="composer" hidden aria-label="Event composer">
