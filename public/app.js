@@ -17,7 +17,7 @@ import {
 } from "./lib/auth.js";
 import {
   pushSupported, getStatus as pushStatus, subscribe as pushSubscribe,
-  unsubscribe as pushUnsubscribe,
+  unsubscribe as pushUnsubscribe, getChatNotify, setChatNotify,
 } from "./lib/push.js";
 import { fieldsToInstant, ymd, zonedParts, formatTime } from "./lib/tz.js";
 
@@ -887,7 +887,24 @@ function openChat() {
   if (!state.chat.loaded) loadChat();
   else { renderChatLog(); markChatSeen(); }
   startChatRealtime();
+  refreshChatMute();
   setTimeout(() => $("#chat-input").focus(), 80);
+}
+
+async function refreshChatMute() {
+  const btn = $("#chat-mute");
+  const st = await pushStatus();
+  if (!st.subscribed) { btn.hidden = true; return; }
+  const on = await getChatNotify();
+  btn.hidden = false;
+  btn.textContent = on ? "Mute chat" : "Muted";
+  btn.title = on ? "Chat notifications on - tap to mute" : "Chat notifications muted - tap to unmute";
+  btn.setAttribute("aria-pressed", on ? "false" : "true");
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try { await setChatNotify(!on); } finally { btn.disabled = false; }
+    refreshChatMute();
+  };
 }
 function closeChat() {
   state.chat.open = false;
@@ -1298,6 +1315,10 @@ async function init() {
   // chat: passive unread badge + live subscription for the session
   checkChatUnread();
   startChatRealtime();
+  if (new URLSearchParams(location.search).get("chat")) {
+    history.replaceState(null, "", location.pathname);
+    openChat();
+  }
 }
 
 window.__gc = state;

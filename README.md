@@ -89,6 +89,26 @@ from the Actions tab to check it's green.
 - Install: browser menu → Install / Add to Home Screen. Share the plain URL with
   the group — they don't sign in.
 
+### 7. (Optional) Push notifications for chat messages
+The reminder cron can't do chat (15-min delay). Instead an Edge Function fires on
+each new message. One-time setup:
+
+```
+npx supabase login
+npx supabase link --project-ref <your-project-ref>
+npx supabase functions deploy notify-message --no-verify-jwt
+npx supabase secrets set \
+  VAPID_PUBLIC_KEY=<public>  VAPID_PRIVATE_KEY=<private>  VAPID_SUBJECT=mailto:you@example.com \
+  WEBHOOK_SECRET=<random string>  APP_URL=https://bniem-ops.github.io/connection-group-calendar
+```
+`VAPID_*` are the same values as the reminder job (`SECRETS.local.txt`).
+`SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` are injected automatically.
+
+Then fill `PROJECT_REF` and the same `WEBHOOK_SECRET` into `supabase/06_chat_push.sql`
+and run it (adds the `notify_chat` column + the trigger). Anyone who has tapped
+**Reminders** now also gets a push per message; the chat panel has a **Mute chat**
+toggle to opt out of just chat.
+
 ---
 
 ## Local development
