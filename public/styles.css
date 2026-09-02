@@ -315,11 +315,39 @@ button { font: inherit; color: inherit; }
 }
 .msg--mine .msg__body { background: rgba(182, 130, 53, 0.1); border-color: var(--color-accent-300); }
 .msg__body--gone { color: var(--color-faint); font-style: italic; background: none; }
+.msg__body a { color: var(--color-accent-700); }
+.msg__body--media { padding: 0; border: 0; background: none; }
+.msg__media { display: block; max-width: 100%; max-height: 240px; border-radius: 7px; }
+
+.msg__reax { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.msg--mine .msg__reax { justify-content: flex-end; }
+.reax {
+  display: inline-flex; align-items: center; gap: 3px;
+  border: 1px solid var(--color-divider); border-radius: 999px;
+  padding: 1px 7px; font-size: 11px; line-height: 1.6;
+  background: none; cursor: pointer;
+}
+.reax[aria-pressed="true"] { border-color: var(--color-accent); background: rgba(182, 130, 53, 0.12); color: var(--color-accent-700); }
+.reax--add { color: var(--color-faint); }
+.reax-quick { display: inline-flex; gap: 2px; }
+.reax-quick button { background: none; border: 0; font-size: 15px; padding: 1px 3px; cursor: pointer; }
+
+.emoji-pop {
+  position: absolute; bottom: calc(100% + 6px); left: 16px; right: 16px;
+  display: flex; flex-wrap: wrap; gap: 2px;
+  max-height: 176px; overflow-y: auto;
+  background: var(--color-card); border: 1px solid var(--color-divider);
+  border-radius: 7px; padding: 8px;
+  box-shadow: 0 8px 24px rgba(45, 43, 43, 0.14);
+}
+.emoji-pop button { background: none; border: 0; font-size: 20px; padding: 4px; cursor: pointer; border-radius: 4px; }
+.emoji-pop button:hover { background: var(--color-surface); }
 .msg__del {
   background: none; border: 0; padding: 0 0 0 8px;
   font-size: 11px; color: var(--color-faint); cursor: pointer;
 }
 .chatbar {
+  position: relative;
   display: flex; gap: 8px; align-items: flex-end;
   padding: 10px 20px calc(12px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--color-divider);

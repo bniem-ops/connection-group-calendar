@@ -10,7 +10,10 @@ import {
   fetchRsvps, fetchMembers, setDisplayName, setRsvp, clearRsvp,
 } from "./lib/events.js";
 import { expandAll, buildRRule } from "./lib/recurrence.js";
-import { fetchMessages, sendMessage, removeMessage, subscribeMessages } from "./lib/chat.js";
+import {
+  fetchMessages, sendMessage, removeMessage, subscribeMessages,
+  fetchReactions, addReaction, removeReaction,
+} from "./lib/chat.js";
 import { monthGridDays, weekOf, addDays, startOfWeek } from "./lib/calendar.js";
 import {
   getSession, onAuthChange, sendMagicLink, signOut, isEmailUser, ensureAnonSession,
@@ -49,7 +52,7 @@ const state = {
   hidden: new Set(JSON.parse(localStorage.getItem(HIDDEN_KEY) || "[]")),
 
   composer: { open: false, mode: "new", eventId: null },
-  chat: { open: false, loaded: false, msgs: [], unsub: null },
+  chat: { open: false, loaded: false, msgs: [], reax: [], unsub: null },
 };
 
 // ---------- helpers ----------
@@ -786,6 +789,8 @@ function mergeMsg(row) {
 
 function renderChatLog() {
   const log = $("#chat-log");
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+  const prevTop = log.scrollTop;
   log.innerHTML = "";
   if (!state.chat.msgs.length) {
     log.appendChild(el("p", "chat-empty", "No messages yet. Say hi."));
@@ -798,7 +803,71 @@ function renderChatLog() {
     if (day !== lastDay) { log.appendChild(el("div", "chatlog__day", chatDayLabel(dt))); lastDay = day; }
     log.appendChild(renderMsg(m));
   }
-  log.scrollTop = log.scrollHeight;
+  log.scrollTop = atBottom ? log.scrollHeight : prevTop;
+}
+
+const IMG_URL_RE = /^https:\/\/\S+\.(?:gif|png|jpe?g|webp)(?:\?\S*)?$/i;
+const GIF_HOST_RE = /^https:\/\/(?:media\d*\.giphy\.com|[a-z-]+\.tenor\.com)\/\S+$/i;
+const isMediaUrl = (t) => IMG_URL_RE.test(t) || GIF_HOST_RE.test(t);
+
+function renderBody(container, text) {
+  const t = text.trim();
+  if (isMediaUrl(t)) {
+    container.classList.add("msg__body--media");
+    const img = el("img", "msg__media");
+    img.alt = "shared image"; img.loading = "lazy";
+    img.onerror = () => { container.classList.remove("msg__body--media"); container.textContent = t; };
+    img.src = t;
+    container.appendChild(img);
+    return;
+  }
+  const parts = text.split(/(https?:\/\/\S+)/g);
+  parts.forEach((p, i) => {
+    if (i % 2 === 1) {
+      const a = el("a", null, p);
+      a.href = p; a.target = "_blank"; a.rel = "noopener";
+      container.appendChild(a);
+    } else if (p) {
+      container.appendChild(document.createTextNode(p));
+    }
+  });
+}
+
+function reaxFor(id) {
+  const by = new Map();
+  for (const r of state.chat.reax) {
+    if (r.message_id !== id) continue;
+    if (!by.has(r.emoji)) by.set(r.emoji, []);
+    by.get(r.emoji).push(r.user_id);
+  }
+  return [...by.entries()].map(([emoji, users]) => ({
+    emoji, count: users.length,
+    mine: users.includes(state.myUserId),
+    names: users.map((u) => state.members.get(u) || "Someone").join(", "),
+  }));
+}
+
+const QUICK_REAX = ["👍", "❤️", "😂", "🎉", "👀", "🙏"];
+
+async function toggleReax(id, emoji) {
+  if (!(await ensureMember())) return;
+  const has = state.chat.reax.some((r) => r.message_id === id && r.user_id === state.myUserId && r.emoji === emoji);
+  if (has) state.chat.reax = state.chat.reax.filter((r) => !(r.message_id === id && r.user_id === state.myUserId && r.emoji === emoji));
+  else state.chat.reax.push({ message_id: id, user_id: state.myUserId, emoji });
+  renderChatLog();
+  try {
+    if (has) await removeReaction(state.myUserId, id, emoji);
+    else await addReaction(state.myUserId, id, emoji);
+  } catch (e) {
+    console.warn(e);
+    await reloadReax();
+    renderChatLog();
+  }
+}
+
+async function reloadReax() {
+  const ids = state.chat.msgs.map((m) => m.id).filter((x) => !String(x).startsWith("temp-"));
+  try { state.chat.reax = await fetchReactions(ids); } catch { /* ignore */ }
 }
 
 function renderMsg(m) {
@@ -810,20 +879,53 @@ function renderMsg(m) {
   meta.innerHTML = `<b>${escapeHtml(name)}</b> · ${escapeHtml(formatTime(new Date(m.created_at)))}` +
     (m.edited_at ? " · edited" : "") + (m._pending ? " · sending…" : "") + (m._failed ? " · failed" : "");
   wrap.appendChild(meta);
+
   if (m.deleted_at) {
     wrap.appendChild(el("div", "msg__body msg__body--gone", "message removed"));
-  } else {
-    wrap.appendChild(el("div", "msg__body", m.body));
-    if ((mine || state.isAdmin) && !m._pending) {
-      const del = el("button", "msg__del", "delete");
-      del.type = "button";
-      del.onclick = async () => {
-        if (!confirm("Delete this message?")) return;
-        try { await removeMessage(m.id); m.deleted_at = new Date().toISOString(); renderChatLog(); }
-        catch (e) { alert(friendly(e)); }
-      };
-      meta.appendChild(del);
+    return wrap;
+  }
+
+  const body = el("div", "msg__body");
+  renderBody(body, m.body);
+  wrap.appendChild(body);
+
+  if ((mine || state.isAdmin) && !m._pending) {
+    const del = el("button", "msg__del", "delete");
+    del.type = "button";
+    del.onclick = async () => {
+      if (!confirm("Delete this message?")) return;
+      try { await removeMessage(m.id); m.deleted_at = new Date().toISOString(); renderChatLog(); }
+      catch (e) { alert(friendly(e)); }
+    };
+    meta.appendChild(del);
+  }
+
+  if (!m._pending) {
+    const rr = el("div", "msg__reax");
+    for (const r of reaxFor(m.id)) {
+      const pill = el("button", "reax", `${r.emoji} ${r.count}`);
+      pill.type = "button";
+      pill.title = r.names;
+      pill.setAttribute("aria-pressed", r.mine ? "true" : "false");
+      pill.onclick = () => toggleReax(m.id, r.emoji);
+      rr.appendChild(pill);
     }
+    const add = el("button", "reax reax--add", "＋");
+    add.type = "button";
+    add.title = "Add a reaction";
+    add.onclick = () => {
+      if (rr.querySelector(".reax-quick")) { rr.querySelector(".reax-quick").remove(); return; }
+      const q = el("span", "reax-quick");
+      for (const e of QUICK_REAX) {
+        const b = el("button", null, e);
+        b.type = "button";
+        b.onclick = () => { q.remove(); toggleReax(m.id, e); };
+        q.appendChild(b);
+      }
+      rr.appendChild(q);
+    };
+    rr.appendChild(add);
+    wrap.appendChild(rr);
   }
   return wrap;
 }
@@ -840,6 +942,7 @@ async function loadChat() {
   try {
     state.chat.msgs = await fetchMessages(150);
     state.chat.loaded = true;
+    await reloadReax();
   } catch (e) { console.warn("chat load failed", e); }
   renderChatLog();
   if (state.chat.open) markChatSeen();
@@ -861,6 +964,16 @@ function startChatRealtime() {
       const m = state.chat.msgs.find((x) => x.id === row.id);
       if (!m) return;
       m.body = row.body; m.edited_at = row.edited_at; m.deleted_at = row.deleted_at;
+      if (state.chat.open) renderChatLog();
+    },
+    onReactionAdd: async (r) => {
+      if (state.chat.reax.some((x) => x.message_id === r.message_id && x.user_id === r.user_id && x.emoji === r.emoji)) return;
+      if (!state.members.has(r.user_id)) { try { state.members = await fetchMembers(); } catch { /* ignore */ } }
+      state.chat.reax.push({ message_id: r.message_id, user_id: r.user_id, emoji: r.emoji });
+      if (state.chat.open) renderChatLog();
+    },
+    onReactionDel: (r) => {
+      state.chat.reax = state.chat.reax.filter((x) => !(x.message_id === r.message_id && x.user_id === r.user_id && x.emoji === r.emoji));
       if (state.chat.open) renderChatLog();
     },
   });
@@ -935,6 +1048,31 @@ async function sendChat() {
     renderChatLog();
     alert(friendly(e));
   }
+}
+
+const EMOJI_LIST = "😀 😁 😂 🤣 🙂 😊 😍 😘 😎 🤔 😴 😇 🙃 😅 😭 😢 😮 😡 😳 🥳 🥺 👍 👎 👏 🙌 🙏 💪 🤝 👀 🔥 ✨ ⭐ 💯 ✅ ❌ ❤️ 🧡 💛 💚 💙 💜 🖤 🎉 🎂 ☕ 🍕 🍺 🏈 📅 ⏰".split(" ");
+
+function insertAtCursor(input, text) {
+  const s = input.selectionStart ?? input.value.length;
+  const e = input.selectionEnd ?? input.value.length;
+  input.value = input.value.slice(0, s) + text + input.value.slice(e);
+  input.selectionStart = input.selectionEnd = s + text.length;
+  input.focus();
+  input.dispatchEvent(new Event("input"));
+}
+
+function toggleEmojiPop() {
+  const pop = $("#emoji-pop");
+  if (!pop.hidden) { pop.hidden = true; return; }
+  if (!pop.childElementCount) {
+    for (const e of EMOJI_LIST) {
+      const b = el("button", null, e);
+      b.type = "button";
+      b.onclick = () => { insertAtCursor($("#chat-input"), e); pop.hidden = true; };
+      pop.appendChild(b);
+    }
+  }
+  pop.hidden = false;
 }
 
 // ---------- composer (Screen 4 / mobile Add) ----------
@@ -1269,6 +1407,11 @@ async function init() {
   $("#chat-input").addEventListener("input", (e) => {
     e.target.style.height = "auto";
     e.target.style.height = Math.min(120, e.target.scrollHeight) + "px";
+  });
+  $("#chat-emoji").onclick = toggleEmojiPop;
+  document.addEventListener("click", (e) => {
+    const pop = $("#emoji-pop");
+    if (!pop.hidden && !pop.contains(e.target) && e.target !== $("#chat-emoji")) pop.hidden = true;
   });
 
   // rails / links

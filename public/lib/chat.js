@@ -42,15 +42,45 @@ export async function removeMessage(id) {
   if (error) throw error;
 }
 
-// Live INSERT + UPDATE. Realtime respects RLS, so "read messages" is what lets
-// this deliver. Returns an unsubscribe function.
-export function subscribeMessages({ onInsert, onUpdate }) {
+// ---- reactions ----
+export async function fetchReactions(messageIds) {
+  if (!messageIds.length) return [];
+  const { data, error } = await supabase
+    .from("message_reactions")
+    .select("message_id, user_id, emoji")
+    .in("message_id", messageIds);
+  if (error) throw error;
+  return data || [];
+}
+
+export async function addReaction(userId, messageId, emoji) {
+  const { error } = await supabase
+    .from("message_reactions")
+    .insert({ message_id: messageId, user_id: userId, emoji });
+  if (error && error.code !== "23505") throw error; // ignore "already reacted"
+}
+
+export async function removeReaction(userId, messageId, emoji) {
+  const { error } = await supabase
+    .from("message_reactions")
+    .delete()
+    .match({ message_id: messageId, user_id: userId, emoji });
+  if (error) throw error;
+}
+
+// Live message INSERT/UPDATE + reaction INSERT/DELETE. Realtime respects RLS.
+// Returns an unsubscribe function.
+export function subscribeMessages({ onInsert, onUpdate, onReactionAdd, onReactionDel }) {
   const ch = supabase
     .channel("group-chat")
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages" },
       (p) => onInsert && onInsert(p.new))
     .on("postgres_changes", { event: "UPDATE", schema: "public", table: "messages" },
       (p) => onUpdate && onUpdate(p.new))
+    .on("postgres_changes", { event: "INSERT", schema: "public", table: "message_reactions" },
+      (p) => onReactionAdd && onReactionAdd(p.new))
+    .on("postgres_changes", { event: "DELETE", schema: "public", table: "message_reactions" },
+      (p) => onReactionDel && onReactionDel(p.old))
     .subscribe();
   return () => supabase.removeChannel(ch);
 }

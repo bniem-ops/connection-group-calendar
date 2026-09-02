@@ -47,10 +47,14 @@ Deno.serve(async (req) => {
     .eq("notify_chat", true)
     .neq("user_id", msg.user_id);
 
-  const text = String(msg.body);
+  const text = String(msg.body).trim();
+  const singleUrl = /^https:\/\/\S+$/.test(text) && !/\s/.test(text);
+  const preview = singleUrl
+    ? (/\.(gif|png|jpe?g|webp)(\?|$)/i.test(text) || /giphy\.com|tenor\.com/i.test(text) ? "sent a GIF" : "sent a link")
+    : (text.length > 140 ? text.slice(0, 139) + "…" : text);
   const notification = JSON.stringify({
     title: senderName,
-    body: text.length > 140 ? text.slice(0, 139) + "…" : text,
+    body: preview,
     url: (APP_URL || ".") + "/?chat=1",
     tag: `chat-${msg.id}`,
   });
