@@ -43,6 +43,9 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; }
+/* Visibility is toggled via the `hidden` attribute (el.hidden = true);
+   components that set their own display: must not override that. */
+[hidden] { display: none !important; }
 body {
   background: var(--color-bg);
   color: var(--color-text);
