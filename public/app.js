@@ -27,7 +27,7 @@ import { fieldsToInstant, ymd, zonedParts, formatTime } from "./lib/tz.js";
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => document.querySelectorAll(s);
-const HIDDEN_KEY = "gc.hiddenCategories";
+const SHOWN_KEY = "gc.shownCategories";
 const TAB_KEY = "gc.tab";
 const SMOOTH = matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
 const isDesktop = () => matchMedia("(min-width: 1100px)").matches;
@@ -51,7 +51,8 @@ const state = {
 
   session: null,
   isAdmin: false,
-  hidden: new Set(JSON.parse(localStorage.getItem(HIDDEN_KEY) || "[]")),
+  // Category filter: empty = show everything; otherwise show only these.
+  shown: new Set(JSON.parse(localStorage.getItem(SHOWN_KEY) || "[]")),
 
   composer: { open: false, mode: "new", eventId: null },
   activeTab: "calendar",
@@ -196,7 +197,7 @@ function occurrencesForGrid() {
   const rangeStart = fieldsToInstant(days[0].dateStr, "00:00");
   const rangeEnd = fieldsToInstant(addDays(days[41].dateStr, 1), "00:00");
   const occ = expandAll(state.events, rangeStart, rangeEnd)
-    .filter((o) => !state.hidden.has(o.event.category_id || "__none__"));
+    .filter((o) => state.shown.size === 0 || state.shown.has(o.event.category_id || "__none__"));
   const map = new Map();
   for (const o of occ) {
     if (!map.has(o.date)) map.set(o.date, []);
@@ -446,24 +447,43 @@ function renderNextUp() {
 function renderLeftRail() {
   const rail = $("#cat-rail");
   rail.innerHTML = "";
+
+  // Counts reflect the whole visible month, independent of the active filter.
+  const { year, month } = state.visible;
+  const gridDays = monthGridDays(year, month);
+  const cStart = fieldsToInstant(gridDays[0].dateStr, "00:00");
+  const cEnd = fieldsToInstant(addDays(gridDays[41].dateStr, 1), "00:00");
   const counts = new Map();
-  for (const list of state.occByDate.values()) for (const o of list) {
+  for (const o of expandAll(state.events, cStart, cEnd)) {
     const id = o.event.category_id || "__none__";
     counts.set(id, (counts.get(id) || 0) + 1);
   }
+
   const rows = [...state.categories.map((c) => ({ id: c.id, name: c.name, color: c.color })),
     { id: "__none__", name: "Uncategorized", color: "#7d5411" }];
+
+  const filtering = state.shown.size > 0;
+  rail.classList.toggle("cat-rail--filtered", filtering);
+
   for (const r of rows) {
+    const on = state.shown.has(r.id);
     const row = el("button", "cat-row");
     row.type = "button";
-    row.setAttribute("aria-pressed", state.hidden.has(r.id) ? "false" : "true");
+    row.setAttribute("aria-pressed", on ? "true" : "false");
     row.innerHTML = `<span class="dot" style="background:${r.color}"></span><span>${escapeHtml(r.name)}</span><span class="cnt">${counts.get(r.id) || 0}</span>`;
     row.onclick = () => {
-      if (state.hidden.has(r.id)) state.hidden.delete(r.id); else state.hidden.add(r.id);
-      localStorage.setItem(HIDDEN_KEY, JSON.stringify([...state.hidden]));
+      if (state.shown.has(r.id)) state.shown.delete(r.id); else state.shown.add(r.id);
+      localStorage.setItem(SHOWN_KEY, JSON.stringify([...state.shown]));
       renderAll();
     };
     rail.appendChild(row);
+  }
+
+  if (filtering) {
+    const clear = el("button", "cat-clear", "Show all");
+    clear.type = "button";
+    clear.onclick = () => { state.shown.clear(); localStorage.setItem(SHOWN_KEY, "[]"); renderAll(); };
+    rail.appendChild(clear);
   }
 
   const needEls = [];

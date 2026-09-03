@@ -638,8 +638,16 @@ button { font: inherit; color: inherit; }
   }
   .cat-row .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
   .cat-row .cnt { margin-left: auto; color: rgba(32, 31, 29, 0.42); font-feature-settings: var(--tnum); }
-  .cat-row[aria-pressed="false"] { color: rgba(32, 31, 29, 0.4); }
-  .cat-row[aria-pressed="false"] .dot { opacity: 0.35; }
+  .cat-row[aria-pressed="true"] { color: var(--color-accent-700); font-weight: 600; }
+  /* Only dim the unpicked rows once a filter is actually active. */
+  .cat-rail--filtered .cat-row[aria-pressed="false"] { color: rgba(32, 31, 29, 0.4); }
+  .cat-rail--filtered .cat-row[aria-pressed="false"] .dot { opacity: 0.35; }
+  .cat-clear {
+    margin-top: 2px; align-self: flex-start;
+    background: none; border: 0; padding: 0; cursor: pointer;
+    font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--color-accent-700);
+  }
 
   .rail__needs { font-size: 12.5px; margin: 10px 0 0; line-height: 1.5; }
   .rail__needs a, .rail__needs button {

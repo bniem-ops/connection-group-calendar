@@ -1,6 +1,6 @@
 /* Group Calendar service worker: offline shell cache + Web Push handling. */
 
-const CACHE = "gc-shell-v14";
+const CACHE = "gc-shell-v15";
 const SHELL = [
   "./",
   "./index.html",
