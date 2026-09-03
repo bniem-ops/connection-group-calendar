@@ -677,8 +677,8 @@ button { font: inherit; color: inherit; }
   }
   .cell__num { width: auto; height: auto; font-size: 12px; align-self: flex-start; justify-content: flex-start; }
   .cell--today .cell__num {
-    width: 20px; height: 20px; border-radius: 50%;
-    background: var(--color-accent-800); color: #f3f2f2;
+    background: none; border-radius: 0;
+    color: var(--color-accent-800); font-weight: 700;
   }
   .cell--sel .cell__num { width: auto; height: auto; border: 0; color: var(--color-text); font-weight: 600; }
   .cell__todaytag { display: block; font-size: 8.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-accent-700); margin-top: 1px; }
