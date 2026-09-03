@@ -111,6 +111,16 @@ function timeLabel(occ) {
 function longDate(date) {
   return new Intl.DateTimeFormat(undefined, { timeZone: GROUP_TIMEZONE, weekday: "short", month: "short", day: "numeric" }).format(date);
 }
+// Return a short timezone label (e.g. "EST") for the configured zone.
+function tzAbbrev(date = new Date()) {
+  try {
+    const parts = new Intl.DateTimeFormat(undefined, { timeZone: GROUP_TIMEZONE, timeZoneName: "short" }).formatToParts(date);
+    const tzn = parts.find((p) => p.type === "timeZoneName");
+    return (tzn && tzn.value) || GROUP_TIMEZONE;
+  } catch (e) {
+    return GROUP_TIMEZONE;
+  }
+}
 function monthLabelParts(y, m) {
   const d = fieldsToInstant(`${y}-${pad(m)}-15`, "12:00");
   return {
@@ -133,7 +143,7 @@ function friendly(e) {
   if (/row-level security|permission denied|violates/i.test(m)) return "The server rejected that - your account isn't allowed to make this change.";
   return m;
 }
-function setStatus(msg) { $("#status-line").textContent = msg || `Times shown in ${GROUP_TIMEZONE}`; }
+function setStatus(msg) { $("#status-line").textContent = msg || `Times shown in ${tzAbbrev()}`; }
 
 // ---------- data ----------
 async function loadData() {
@@ -143,7 +153,7 @@ async function loadData() {
     state.events = evs;
     await loadRsvpData();
     renderAll();
-    setStatus(`Times shown in ${GROUP_TIMEZONE}`);
+    setStatus();
   } catch (e) {
     console.error(e);
     setStatus("Could not load data. Check public/config.js and that the SQL was run.");
