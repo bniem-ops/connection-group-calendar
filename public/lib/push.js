@@ -82,20 +82,3 @@ export async function unsubscribe() {
   }
 }
 
-// Per-device toggle for chat-message pushes (event reminders are unaffected).
-export async function getChatNotify() {
-  if (!pushSupported()) return true;
-  const reg = await getReg();
-  const sub = await reg.pushManager.getSubscription();
-  if (!sub) return true;
-  const { data } = await supabase
-    .from("push_subscriptions").select("notify_chat").eq("endpoint", sub.endpoint).maybeSingle();
-  return data ? data.notify_chat !== false : true;
-}
-
-export async function setChatNotify(on) {
-  const reg = await getReg();
-  const sub = await reg.pushManager.getSubscription();
-  if (!sub) return;
-  await supabase.from("push_subscriptions").update({ notify_chat: !!on }).eq("endpoint", sub.endpoint);
-}

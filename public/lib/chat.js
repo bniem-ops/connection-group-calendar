@@ -2,12 +2,16 @@
 
 import { supabase } from "./supabase.js";
 
+const MSG_COLS =
+  "id, body, created_at, edited_at, deleted_at, user_id, " +
+  "attached_event_id, attached_occurrence_date, members(display_name)";
+
 // Recent history, oldest-first for display. The members() join pulls the
 // poster's name in one round trip.
 export async function fetchMessages(limit = 100) {
   const { data, error } = await supabase
     .from("messages")
-    .select("id, body, created_at, edited_at, deleted_at, user_id, members(display_name)")
+    .select(MSG_COLS)
     .order("created_at", { ascending: false })
     .limit(limit);
   if (error) throw error;
@@ -16,14 +20,36 @@ export async function fetchMessages(limit = 100) {
     .reverse();
 }
 
-export async function sendMessage(userId, body) {
+// attach: { eventId, occurrenceDate } | null
+export async function sendMessage(userId, body, attach) {
+  const row = { user_id: userId, body };
+  if (attach && attach.eventId) {
+    row.attached_event_id = attach.eventId;
+    row.attached_occurrence_date = attach.occurrenceDate || null;
+  }
   const { data, error } = await supabase
     .from("messages")
-    .insert({ user_id: userId, body })
-    .select("id, body, created_at, user_id")
+    .insert(row)
+    .select("id, body, created_at, user_id, attached_event_id, attached_occurrence_date")
     .single();
   if (error) throw error;
   return data;
+}
+
+// ---- member read-cursor + mute (per person) ----
+export async function fetchMe(userId) {
+  const { data } = await supabase
+    .from("members").select("display_name, last_read_at, chat_muted")
+    .eq("user_id", userId).maybeSingle();
+  return data || null;
+}
+
+export async function markRead(userId) {
+  await supabase.from("members").update({ last_read_at: new Date().toISOString() }).eq("user_id", userId);
+}
+
+export async function setMuted(userId, muted) {
+  await supabase.from("members").update({ chat_muted: !!muted }).eq("user_id", userId);
 }
 
 export async function editMessage(id, body) {

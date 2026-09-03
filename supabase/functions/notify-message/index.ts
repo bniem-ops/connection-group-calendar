@@ -40,12 +40,16 @@ Deno.serve(async (req) => {
     .from("members").select("display_name").eq("user_id", msg.user_id).single();
   const senderName = sender?.display_name ?? "Someone";
 
-  const { data: subs } = await admin
+  // Mute is per person now (members.chat_muted), not per device.
+  const { data: muted } = await admin.from("members").select("user_id").eq("chat_muted", true);
+  const mutedSet = new Set((muted ?? []).map((m) => m.user_id));
+
+  const { data: allSubs } = await admin
     .from("push_subscriptions")
-    .select("id, endpoint, p256dh, auth")
+    .select("id, endpoint, p256dh, auth, user_id")
     .eq("active", true)
-    .eq("notify_chat", true)
     .neq("user_id", msg.user_id);
+  const subs = (allSubs ?? []).filter((s) => !mutedSet.has(s.user_id));
 
   const text = String(msg.body).trim();
   const singleUrl = /^https:\/\/\S+$/.test(text) && !/\s/.test(text);

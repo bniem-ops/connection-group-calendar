@@ -10,77 +10,133 @@
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500;600&family=Lora:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,400&family=Lora:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <!-- Desktop chrome (>=1100px). On mobile each view carries its own header. -->
   <header class="topbar">
     <div class="topbar__id">
-      <p class="kicker kicker--accent">MERCY HILL &middot; KENNEDY AVE</p>
+      <p class="kicker kicker--accent">MERCY HILL &middot; GILBERT/NIEMERSKI CONNECTION GROUP</p>
       <h1 class="topbar__title">Connection Group</h1>
     </div>
     <div class="topbar__actions">
-      <button id="btn-chat" class="linkbtn" type="button">Chat<span id="chat-dot" class="dot-badge" hidden></span></button>
-      <button id="btn-reminders" class="linkbtn" type="button">Reminders</button>
+      <button id="btn-chat" class="linkbtn" type="button">Chat<span id="chat-count" class="count-badge" hidden></span></button>
+      <span class="topbar__sep"></span>
+      <button class="linkbtn js-reminders" type="button">Reminders</button>
       <span id="group-count" class="topbar__meta"></span>
       <span class="topbar__sep"></span>
       <button id="btn-new-event" class="btn btn--primary" type="button">+ New event</button>
-      <button id="btn-admin" class="linkbtn linkbtn--faint" type="button">Admin</button>
+      <button class="linkbtn linkbtn--faint js-admin" type="button">Admin</button>
     </div>
   </header>
 
-  <div class="layout">
-    <aside class="rail rail--left">
-      <p class="kicker">Categories</p>
-      <div id="cat-rail" class="cat-rail"></div>
-      <div class="rail__rule"></div>
-      <p class="kicker">Needs you</p>
-      <p id="needs-you" class="rail__needs"></p>
-      <div class="rail__rule"></div>
-      <nav class="rail__links">
-        <button id="lnk-categories" class="rail__link" type="button">Manage categories</button>
-        <button id="lnk-admins" class="rail__link" type="button">Admins &amp; members</button>
-        <button id="lnk-export" class="rail__link" type="button">Export to Google Cal</button>
-      </nav>
-    </aside>
+  <div class="app">
+    <div class="views">
 
-    <main class="cal">
-      <div class="monthbar">
-        <h2 id="month-label" class="monthbar__label">&nbsp;</h2>
-        <div class="monthbar__nav">
-          <button id="btn-prev" class="navsq" type="button" aria-label="Previous month">&#8249;</button>
-          <button id="btn-next" class="navsq" type="button" aria-label="Next month">&#8250;</button>
-          <button id="btn-today" class="today-pill" type="button" hidden>Today</button>
+      <!-- ===== Calendar tab ===== -->
+      <section id="view-calendar" class="view">
+        <header class="viewhead">
+          <div>
+            <p class="kicker kicker--accent">MERCY HILL &middot; GILBERT/NIEMERSKI CONNECTION GROUP</p>
+            <h1 class="viewhead__title">Connection Group</h1>
+          </div>
+          <span class="viewhead__right">
+            <button class="linkbtn js-reminders" type="button">Reminders</button>
+            <button class="linkbtn linkbtn--faint js-admin" type="button">Admin</button>
+          </span>
+        </header>
+
+        <div class="layout">
+          <aside class="rail rail--left">
+            <p class="kicker">Categories</p>
+            <div id="cat-rail" class="cat-rail"></div>
+            <div class="rail__rule"></div>
+            <p class="kicker">Needs you</p>
+            <p id="needs-you" class="rail__needs"></p>
+            <div class="rail__rule"></div>
+            <nav class="rail__links">
+              <button id="lnk-categories" class="rail__link" type="button">Manage categories</button>
+              <button id="lnk-admins" class="rail__link" type="button">Admins &amp; members</button>
+              <button id="lnk-export" class="rail__link" type="button">Export to Google Cal</button>
+            </nav>
+          </aside>
+
+          <main class="cal">
+            <div class="monthbar">
+              <h2 id="month-label" class="monthbar__label">&nbsp;</h2>
+              <div class="monthbar__nav">
+                <button id="btn-prev" class="navsq" type="button" aria-label="Previous month">&#8249;</button>
+                <button id="btn-next" class="navsq" type="button" aria-label="Next month">&#8250;</button>
+                <button id="btn-today" class="today-pill" type="button" hidden>Today</button>
+              </div>
+              <p class="monthbar__hint">Click any day to add &middot; drag an event to move it</p>
+            </div>
+            <div id="weekhead" class="weekhead"></div>
+            <div id="grid" class="grid" role="grid"></div>
+            <section id="daysection" class="daysection"></section>
+            <p id="nextup" class="nextup"></p>
+            <p id="status-line" class="status-line" role="status"></p>
+          </main>
+
+          <aside id="weekrail" class="rail rail--right"></aside>
         </div>
-        <p class="monthbar__hint">Click any day to add &middot; drag an event to move it</p>
-      </div>
-      <div id="weekhead" class="weekhead"></div>
-      <div id="grid" class="grid" role="grid"></div>
-      <section id="daysection" class="daysection"></section>
-      <p id="nextup" class="nextup"></p>
-      <p id="status-line" class="status-line" role="status"></p>
-    </main>
+      </section>
 
-    <aside id="weekrail" class="rail rail--right"></aside>
-  </div>
+      <!-- ===== Chat tab ===== -->
+      <section id="view-chat" class="view" hidden>
+        <header class="viewhead">
+          <div>
+            <p class="kicker kicker--accent">MERCY HILL &middot; GILBERT/NIEMERSKI CONNECTION GROUP</p>
+            <h1 class="viewhead__title">Group chat</h1>
+          </div>
+          <span class="viewhead__right">
+            <span id="chat-incount" class="viewhead__meta"></span>
+            <button id="chat-mute" class="linkbtn" type="button">Mute</button>
+            <button id="chat-close" class="btn btn--icon" type="button" aria-label="Close">&times;</button>
+          </span>
+        </header>
 
-  <!-- Group chat: slide-in panel -->
-  <section id="chat" class="chatpanel" hidden aria-label="Group chat">
-    <div class="chatpanel__head">
-      <p class="kicker kicker--accent">Group chat</p>
-      <span class="chatpanel__headright">
-        <button id="chat-mute" class="linkbtn" type="button" hidden></button>
-        <button id="chat-close" class="btn btn--icon" type="button" aria-label="Close">&times;</button>
-      </span>
+        <div class="chat">
+          <div id="chat-log" class="chatlog" aria-live="polite"></div>
+
+          <div id="attach-sheet" class="attachsheet" hidden>
+            <div class="attachsheet__head">
+              <p class="kicker">Attach an event</p>
+              <button id="attach-cancel" class="linkbtn" type="button">Cancel</button>
+            </div>
+            <div id="attach-list" class="attachsheet__list"></div>
+          </div>
+
+          <form id="chat-form" class="cchat">
+            <div id="draft-card" class="draftcard" hidden></div>
+            <div class="cchat__row1">
+              <div id="emoji-pop" class="emoji-pop" hidden></div>
+              <button id="chat-emoji" class="btn btn--icon" type="button" aria-label="Emoji">&#128578;</button>
+              <textarea id="chat-input" rows="1" maxlength="2000" placeholder="Say something to the group&hellip;" aria-label="Message"></textarea>
+              <button id="chat-send" class="btn btn--primary" type="submit">Send</button>
+            </div>
+            <div class="cchat__row2">
+              <button id="attach-open" class="attachpill" type="button"><span class="attachpill__plus">+</span> Attach an event</button>
+              <span class="cchat__cap">Everyone gets a push unless they've muted</span>
+            </div>
+          </form>
+        </div>
+      </section>
+
     </div>
-    <div id="chat-log" class="chatlog" aria-live="polite"></div>
-    <form id="chat-form" class="chatbar">
-      <div id="emoji-pop" class="emoji-pop" hidden></div>
-      <button id="chat-emoji" class="btn btn--icon" type="button" aria-label="Emoji">&#128578;</button>
-      <textarea id="chat-input" rows="1" maxlength="2000" placeholder="Message the group" aria-label="Message"></textarea>
-      <button id="chat-send" class="btn btn--primary" type="submit">Send</button>
-    </form>
-  </section>
+
+    <nav class="tabbar" aria-label="Sections">
+      <button id="tab-calendar" class="tab" type="button" aria-current="page">
+        <span class="tab__ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"></rect><path d="M16 2v4M8 2v4M3 10h18"></path></svg></span>
+        <span class="tab__label">Calendar</span>
+      </button>
+      <button id="tab-chat" class="tab" type="button">
+        <span class="tab__ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg><span id="tab-chat-dot" class="tab__dot" hidden></span></span>
+        <span class="tab__label">Chat</span>
+      </button>
+    </nav>
+  </div>
 
   <!-- Composer: slide-in panel, not a modal -->
   <section id="composer" class="composer" hidden aria-label="Event composer">
@@ -197,14 +253,14 @@
     </form>
   </dialog>
 
-  <!-- Display name (first RSVP) -->
+  <!-- Display name (first RSVP / message) -->
   <dialog id="dialog-name" class="dialog">
     <form id="form-name" method="dialog">
       <div class="dialog__head">
         <h3>Your name</h3>
         <button class="btn btn--icon" value="cancel" aria-label="Close" type="submit" formnovalidate>&times;</button>
       </div>
-      <p class="muted">So the group can see who's coming. You'll only be asked once.</p>
+      <p class="muted">So the group can see who's coming and talking. You'll only be asked once.</p>
       <label class="field"><span>Name</span>
         <input id="name-input" type="text" maxlength="60" autocomplete="name" required placeholder="First name & last initial" />
       </label>

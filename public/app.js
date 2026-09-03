@@ -13,6 +13,7 @@ import { expandAll, buildRRule } from "./lib/recurrence.js";
 import {
   fetchMessages, sendMessage, removeMessage, subscribeMessages,
   fetchReactions, addReaction, removeReaction,
+  fetchMe, markRead, setMuted,
 } from "./lib/chat.js";
 import { monthGridDays, weekOf, addDays, startOfWeek } from "./lib/calendar.js";
 import {
@@ -20,13 +21,14 @@ import {
 } from "./lib/auth.js";
 import {
   pushSupported, getStatus as pushStatus, subscribe as pushSubscribe,
-  unsubscribe as pushUnsubscribe, getChatNotify, setChatNotify,
+  unsubscribe as pushUnsubscribe,
 } from "./lib/push.js";
 import { fieldsToInstant, ymd, zonedParts, formatTime } from "./lib/tz.js";
 
 const $ = (s) => document.querySelector(s);
+const $$ = (s) => document.querySelectorAll(s);
 const HIDDEN_KEY = "gc.hiddenCategories";
-const CHAT_SEEN_KEY = "gc.chatLastSeen";
+const TAB_KEY = "gc.tab";
 const SMOOTH = matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
 const isDesktop = () => matchMedia("(min-width: 1100px)").matches;
 
@@ -52,7 +54,13 @@ const state = {
   hidden: new Set(JSON.parse(localStorage.getItem(HIDDEN_KEY) || "[]")),
 
   composer: { open: false, mode: "new", eventId: null },
-  chat: { open: false, loaded: false, msgs: [], reax: [], unsub: null },
+  activeTab: "calendar",
+  chat: {
+    loaded: false, msgs: [], reax: [], unsub: null,
+    muted: false, lastReadAt: null,
+    attach: null,            // draft: { eventId, occurrenceDate }
+    attachExpanded: false,
+  },
 };
 
 // ---------- helpers ----------
@@ -775,8 +783,10 @@ function promptName() {
 }
 
 // ---------- group chat ----------
-function chatDayLabel(d) {
-  return new Intl.DateTimeFormat(undefined, { timeZone: GROUP_TIMEZONE, weekday: "long", month: "long", day: "numeric" }).format(d);
+function chatDayLabel(dstr, d) {
+  if (dstr === state.todayStr) return "Today";
+  if (dstr === addDays(state.todayStr, -1)) return "Yesterday";
+  return new Intl.DateTimeFormat(undefined, { timeZone: GROUP_TIMEZONE, weekday: "short", month: "short", day: "numeric" }).format(d);
 }
 
 function mergeMsg(row) {
@@ -800,7 +810,7 @@ function renderChatLog() {
   for (const m of state.chat.msgs) {
     const dt = new Date(m.created_at);
     const day = ymd(dt);
-    if (day !== lastDay) { log.appendChild(el("div", "chatlog__day", chatDayLabel(dt))); lastDay = day; }
+    if (day !== lastDay) { log.appendChild(el("div", "chatlog__day", chatDayLabel(day, dt))); lastDay = day; }
     log.appendChild(renderMsg(m));
   }
   log.scrollTop = atBottom ? log.scrollHeight : prevTop;
@@ -875,9 +885,12 @@ function renderMsg(m) {
   const wrap = el("div", "msg" + (mine ? " msg--mine" : ""));
   wrap.dataset.id = m.id;
   const name = mine ? "You" : (m.display_name || state.members.get(m.user_id) || "Someone");
+
   const meta = el("div", "msg__meta");
-  meta.innerHTML = `<b>${escapeHtml(name)}</b> · ${escapeHtml(formatTime(new Date(m.created_at)))}` +
-    (m.edited_at ? " · edited" : "") + (m._pending ? " · sending…" : "") + (m._failed ? " · failed" : "");
+  meta.appendChild(el("b", null, name));
+  const time = el("span", "msg__time",
+    formatTime(new Date(m.created_at)) + (m.edited_at ? " · edited" : ""));
+  meta.appendChild(time);
   wrap.appendChild(meta);
 
   if (m.deleted_at) {
@@ -885,11 +898,23 @@ function renderMsg(m) {
     return wrap;
   }
 
-  const body = el("div", "msg__body");
+  const body = el("div", "msg__body" + (m._pending ? " msg__body--pending" : ""));
   renderBody(body, m.body);
   wrap.appendChild(body);
 
-  if ((mine || state.isAdmin) && !m._pending) {
+  if (m.attached_event_id) {
+    const card = attachedEventCard(m.attached_event_id, m.attached_occurrence_date);
+    if (card) wrap.appendChild(card);
+  }
+
+  if (m._failed) {
+    const retry = el("button", "msg__retry", "Didn't send — tap to retry");
+    retry.type = "button";
+    retry.onclick = () => retrySend(m);
+    wrap.appendChild(retry);
+  }
+
+  if ((mine || state.isAdmin) && !m._pending && !m._failed) {
     const del = el("button", "msg__del", "delete");
     del.type = "button";
     del.onclick = async () => {
@@ -900,7 +925,7 @@ function renderMsg(m) {
     meta.appendChild(del);
   }
 
-  if (!m._pending) {
+  if (!m._pending && !m._failed) {
     const rr = el("div", "msg__reax");
     for (const r of reaxFor(m.id)) {
       const pill = el("button", "reax", `${r.emoji} ${r.count}`);
@@ -930,22 +955,41 @@ function renderMsg(m) {
   return wrap;
 }
 
-function markChatSeen() {
-  const last = state.chat.msgs[state.chat.msgs.length - 1];
-  if (last && !String(last.id).startsWith("temp-")) {
-    try { localStorage.setItem(CHAT_SEEN_KEY, last.created_at); } catch { /* ignore */ }
-  }
-  $("#chat-dot").hidden = true;
+const onChatTab = () => state.activeTab === "chat" && !$("#view-chat").hidden;
+
+function unreadCount() {
+  const cut = state.chat.lastReadAt ? new Date(state.chat.lastReadAt).getTime() : 0;
+  return state.chat.msgs.filter(
+    (m) => m.user_id !== state.myUserId && !String(m.id).startsWith("temp-") &&
+      new Date(m.created_at).getTime() > cut
+  ).length;
+}
+
+function updateUnread() {
+  const n = unreadCount();
+  $("#tab-chat-dot").hidden = n === 0;
+  const badge = $("#chat-count");
+  badge.hidden = n === 0;
+  badge.textContent = n > 99 ? "99+" : String(n);
+}
+
+async function markReadNow() {
+  const last = state.chat.msgs.filter((m) => !String(m.id).startsWith("temp-")).slice(-1)[0];
+  state.chat.lastReadAt = last ? last.created_at : new Date().toISOString();
+  updateUnread();
+  if (state.myUserId) { try { await markRead(state.myUserId); } catch { /* ignore */ } }
 }
 
 async function loadChat() {
   try {
-    state.chat.msgs = await fetchMessages(150);
+    const [msgs, me] = await Promise.all([fetchMessages(150), fetchMe(state.myUserId)]);
+    state.chat.msgs = msgs;
     state.chat.loaded = true;
+    if (me) { state.chat.muted = !!me.chat_muted; state.chat.lastReadAt = me.last_read_at; }
     await reloadReax();
   } catch (e) { console.warn("chat load failed", e); }
   renderChatLog();
-  if (state.chat.open) markChatSeen();
+  updateUnread();
 }
 
 function startChatRealtime() {
@@ -957,97 +1001,260 @@ function startChatRealtime() {
       }
       row.display_name = state.members.get(row.user_id) || null;
       mergeMsg(row);
-      if (state.chat.open) { renderChatLog(); markChatSeen(); }
-      else if (row.user_id !== state.myUserId) $("#chat-dot").hidden = false;
+      if (onChatTab()) { renderChatLog(); markReadNow(); }
+      else { updateUnread(); }
     },
     onUpdate: (row) => {
       const m = state.chat.msgs.find((x) => x.id === row.id);
       if (!m) return;
       m.body = row.body; m.edited_at = row.edited_at; m.deleted_at = row.deleted_at;
-      if (state.chat.open) renderChatLog();
+      if (onChatTab()) renderChatLog();
     },
     onReactionAdd: async (r) => {
       if (state.chat.reax.some((x) => x.message_id === r.message_id && x.user_id === r.user_id && x.emoji === r.emoji)) return;
       if (!state.members.has(r.user_id)) { try { state.members = await fetchMembers(); } catch { /* ignore */ } }
       state.chat.reax.push({ message_id: r.message_id, user_id: r.user_id, emoji: r.emoji });
-      if (state.chat.open) renderChatLog();
+      if (onChatTab()) renderChatLog();
     },
     onReactionDel: (r) => {
       state.chat.reax = state.chat.reax.filter((x) => !(x.message_id === r.message_id && x.user_id === r.user_id && x.emoji === r.emoji));
-      if (state.chat.open) renderChatLog();
+      if (onChatTab()) renderChatLog();
     },
   });
 }
 
-async function checkChatUnread() {
+// Cheap unread probe for first paint, before the full history loads.
+async function probeUnread() {
   if (!state.myUserId) return;
   try {
-    const { data } = await supabase
-      .from("messages").select("created_at, user_id")
-      .order("created_at", { ascending: false }).limit(1);
-    const newest = data && data[0];
-    if (!newest) return;
-    let seen = null;
-    try { seen = localStorage.getItem(CHAT_SEEN_KEY); } catch { /* ignore */ }
-    if (newest.user_id !== state.myUserId && (!seen || newest.created_at > seen)) $("#chat-dot").hidden = false;
+    const [{ data: newest }, me] = await Promise.all([
+      supabase.from("messages").select("created_at, user_id").order("created_at", { ascending: false }).limit(1),
+      fetchMe(state.myUserId),
+    ]);
+    if (me) { state.chat.muted = !!me.chat_muted; state.chat.lastReadAt = me.last_read_at; }
+    const n = newest && newest[0];
+    if (n && n.user_id !== state.myUserId && (!state.chat.lastReadAt || n.created_at > state.chat.lastReadAt)) {
+      $("#tab-chat-dot").hidden = false;
+      $("#chat-count").hidden = false;
+      $("#chat-count").textContent = "•";
+    }
   } catch { /* ignore */ }
 }
 
-function openChat() {
-  state.chat.open = true;
-  $("#chat").hidden = false;
-  requestAnimationFrame(() => $("#chat").classList.add("chatpanel--in"));
+function enterChat() {
   if (!state.chat.loaded) loadChat();
-  else { renderChatLog(); markChatSeen(); }
+  else { renderChatLog(); markReadNow(); }
   startChatRealtime();
-  refreshChatMute();
-  setTimeout(() => $("#chat-input").focus(), 80);
+  refreshMuteBtn();
+  $("#chat-incount").textContent = `${state.members.size} in`;
+  setTimeout(() => { renderChatLog(); markReadNow(); $("#chat-input").focus(); }, 60);
 }
 
-async function refreshChatMute() {
+function refreshMuteBtn() {
   const btn = $("#chat-mute");
-  const st = await pushStatus();
-  if (!st.subscribed) { btn.hidden = true; return; }
-  const on = await getChatNotify();
-  btn.hidden = false;
-  btn.textContent = on ? "Mute chat" : "Muted";
-  btn.title = on ? "Chat notifications on - tap to mute" : "Chat notifications muted - tap to unmute";
-  btn.setAttribute("aria-pressed", on ? "false" : "true");
+  btn.textContent = state.chat.muted ? "Unmute" : "Mute";
+  btn.setAttribute("aria-pressed", state.chat.muted ? "true" : "false");
   btn.onclick = async () => {
-    btn.disabled = true;
-    try { await setChatNotify(!on); } finally { btn.disabled = false; }
-    refreshChatMute();
+    const next = !state.chat.muted;
+    state.chat.muted = next;
+    refreshMuteBtn();
+    if (state.myUserId && state.members.has(state.myUserId)) {
+      try { await setMuted(state.myUserId, next); } catch (e) { console.warn(e); }
+    }
   };
 }
-function closeChat() {
-  state.chat.open = false;
-  $("#chat").classList.remove("chatpanel--in");
-  setTimeout(() => { $("#chat").hidden = true; }, 240);
-}
 
+// ---- send ----
 async function sendChat() {
   const input = $("#chat-input");
   const body = input.value.trim();
   if (!body) return;
   if (!(await ensureMember())) { alert("Set a display name first so the group knows who's talking."); return; }
+  const attach = state.chat.attach;
   input.value = "";
   input.style.height = "auto";
+  clearAttach();
   const temp = {
     id: `temp-${Date.now()}`, body, created_at: new Date().toISOString(),
-    user_id: state.myUserId, display_name: state.members.get(state.myUserId) || "You", _pending: true,
+    user_id: state.myUserId, display_name: state.members.get(state.myUserId) || "You",
+    attached_event_id: attach ? attach.eventId : null,
+    attached_occurrence_date: attach ? attach.occurrenceDate : null,
+    _pending: true, _attach: attach,
   };
   state.chat.msgs.push(temp);
   renderChatLog();
+  setSendReady();
   try {
-    const saved = await sendMessage(state.myUserId, body);
+    const saved = await sendMessage(state.myUserId, body, attach);
     mergeMsg({ ...saved, display_name: state.members.get(state.myUserId) || null });
     renderChatLog();
-    markChatSeen();
+    markReadNow();
   } catch (e) {
     temp._pending = false; temp._failed = true;
     renderChatLog();
-    alert(friendly(e));
+    console.warn(e);
   }
+}
+
+async function retrySend(m) {
+  m._failed = false; m._pending = true;
+  renderChatLog();
+  try {
+    const saved = await sendMessage(state.myUserId, m.body, m._attach);
+    Object.assign(m, saved, { _pending: false, _failed: false });
+    mergeMsg({ ...m, display_name: state.members.get(state.myUserId) || null });
+    renderChatLog();
+    markReadNow();
+  } catch (e) {
+    m._pending = false; m._failed = true;
+    renderChatLog();
+    console.warn(e);
+  }
+}
+
+function setSendReady() {
+  $("#chat-send").classList.toggle("is-ready", $("#chat-input").value.trim().length > 0);
+}
+
+// ---- attached-event card ----
+function occForAttach(eventId, occDate) {
+  const ev = state.events.find((e) => e.id === eventId);
+  if (!ev) return null;
+  const d = occDate || ymd(new Date(ev.starts_at));
+  const start = occDate
+    ? fieldsToInstant(occDate, ev.all_day ? "00:00" : hhmm(new Date(ev.starts_at)))
+    : new Date(ev.starts_at);
+  const durMs = ev.ends_at ? new Date(ev.ends_at) - new Date(ev.starts_at) : 0;
+  return { event: ev, start, end: durMs ? new Date(start.getTime() + durMs) : null, date: d, recurring: !!ev.rrule };
+}
+
+function attachedEventCard(eventId, occDate) {
+  const occ = occForAttach(eventId, occDate);
+  const card = el("button", "evcard");
+  card.type = "button";
+  if (!occ) { card.appendChild(el("span", "evcard__mid", "Event no longer available")); card.disabled = true; return card; }
+  const ev = occ.event;
+  card.style.borderLeftColor = catColor(ev.category_id);
+  const g = el("span", "evcard__gutter");
+  const mon = new Intl.DateTimeFormat(undefined, { timeZone: GROUP_TIMEZONE, month: "short" }).format(occ.start).toUpperCase();
+  const gm = el("span", "evcard__mon", mon); gm.style.color = catTextColor(ev.category_id);
+  g.append(gm, el("span", "evcard__day", String(dayNum(occ.date))));
+  const mid = el("span", "evcard__mid");
+  const cn = el("span", "evcard__cat", catName(ev.category_id).toUpperCase()); cn.style.color = catTextColor(ev.category_id);
+  mid.append(cn, el("span", "evcard__title", occ.overrideTitle || ev.title));
+  const sub = ev.all_day ? "All day" : shortTime(occ.start);
+  mid.appendChild(el("span", "evcard__sub", ev.location ? `${sub} · ${ev.location}` : sub));
+  card.append(g, mid, el("span", "evcard__chev", "›"));
+  card.onclick = (e) => { e.stopPropagation(); openEvent(occ); };
+  return card;
+}
+
+// ---- attach picker ----
+function upcomingOccurrences(limit) {
+  const from = fieldsToInstant(state.todayStr, "00:00");
+  const to = new Date(from.getTime() + 120 * 86400000);
+  const list = expandAll(state.events, from, to)
+    .filter((o) => o.date >= state.todayStr)
+    .sort((a, b) => a.start - b.start);
+  return limit ? list.slice(0, limit) : list;
+}
+
+function openAttachPicker() {
+  state.chat.attachExpanded = false;
+  renderAttachList();
+  $("#attach-sheet").hidden = false;
+  $("#chat-log").style.opacity = "0.4";
+}
+function closeAttachPicker() {
+  $("#attach-sheet").hidden = true;
+  $("#chat-log").style.opacity = "";
+}
+
+function renderAttachList() {
+  const host = $("#attach-list");
+  host.innerHTML = "";
+  const all = upcomingOccurrences(0);
+  const shown = state.chat.attachExpanded ? all.slice(0, 40) : all.slice(0, 6);
+  for (const occ of shown) {
+    const row = el("button", "attach-row");
+    row.type = "button";
+    const picked = state.chat.attach && state.chat.attach.eventId === occ.event.id && state.chat.attach.occurrenceDate === occ.date;
+    if (picked) row.classList.add("attach-row--pick");
+    const g = el("span", "attach-row__gutter");
+    g.append(
+      el("span", "attach-row__mon", new Intl.DateTimeFormat(undefined, { timeZone: GROUP_TIMEZONE, month: "short" }).format(occ.start).toUpperCase()),
+      el("span", "attach-row__day", String(dayNum(occ.date))),
+    );
+    const b = el("span", "attach-row__body");
+    b.style.borderLeftColor = catColor(occ.event.category_id);
+    const cat = el("span", "attach-row__cat",
+      `${catName(occ.event.category_id).toUpperCase()} · ${occ.event.all_day ? "ALL DAY" : shortTime(occ.start).toUpperCase()}`);
+    cat.style.color = catTextColor(occ.event.category_id);
+    b.append(cat, el("span", "attach-row__title", occ.overrideTitle || occ.event.title));
+    row.append(g, b);
+    if (picked) row.appendChild(el("span", "attach-row__check", "✓"));
+    row.onclick = () => pickAttach(occ);
+    host.appendChild(row);
+  }
+  if (!state.chat.attachExpanded && all.length > 6) {
+    const more = el("button", "linkbtn", "Show more upcoming");
+    more.type = "button";
+    more.style.margin = "8px 0 0";
+    more.onclick = () => { state.chat.attachExpanded = true; renderAttachList(); };
+    host.appendChild(more);
+  }
+  if (!all.length) host.appendChild(el("p", "muted", "No upcoming events to attach."));
+}
+
+function pickAttach(occ) {
+  state.chat.attach = { eventId: occ.event.id, occurrenceDate: occ.date };
+  closeAttachPicker();
+  renderDraftCard();
+}
+function clearAttach() {
+  state.chat.attach = null;
+  renderDraftCard();
+}
+function renderDraftCard() {
+  const host = $("#draft-card");
+  host.innerHTML = "";
+  if (!state.chat.attach) { host.hidden = true; return; }
+  const card = attachedEventCard(state.chat.attach.eventId, state.chat.attach.occurrenceDate);
+  card.classList.remove("evcard");
+  // reuse the inner nodes of the built card
+  while (card.firstChild) host.appendChild(card.firstChild);
+  const x = el("button", "draftcard__x", "×");
+  x.type = "button";
+  x.onclick = clearAttach;
+  host.appendChild(x);
+  host.hidden = false;
+}
+
+// ---------- tab routing (mobile) / chat panel (desktop) ----------
+function setTab(name) {
+  state.activeTab = name;
+  try { localStorage.setItem(TAB_KEY, name); } catch { /* ignore */ }
+
+  $("#tab-calendar").setAttribute("aria-current", name === "calendar" ? "page" : "false");
+  $("#tab-chat").setAttribute("aria-current", name === "chat" ? "page" : "false");
+
+  if (isDesktop()) {
+    $("#view-calendar").hidden = false;
+    const cv = $("#view-chat");
+    if (name === "chat") {
+      cv.hidden = false;
+      requestAnimationFrame(() => cv.classList.add("is-open"));
+      enterChat();
+    } else {
+      cv.classList.remove("is-open");
+      setTimeout(() => { if (state.activeTab !== "chat") cv.hidden = true; }, 240);
+    }
+    return;
+  }
+
+  $("#view-calendar").hidden = name !== "calendar";
+  $("#view-chat").hidden = name !== "chat";
+  if (name === "chat") enterChat();
 }
 
 const EMOJI_LIST = "😀 😁 😂 🤣 🙂 😊 😍 😘 😎 🤔 😴 😇 🙃 😅 😭 😢 😮 😡 😳 🥳 🥺 👍 👎 👏 🙌 🙏 💪 🤝 👀 🔥 ✨ ⭐ 💯 ✅ ❌ ❤️ 🧡 💛 💚 💙 💜 🖤 🎉 🎂 ☕ 🍕 🍺 🏈 📅 ⏰".split(" ");
@@ -1278,7 +1485,7 @@ async function refreshAuthUI() {
       ? "You can create and edit events."
       : "This email is not on the admin list, so editing will be blocked. Ask an admin to add it.";
   }
-  $("#btn-admin").textContent = state.isAdmin ? "Admin ✓" : "Admin";
+  $$(".js-admin").forEach((b) => { b.textContent = state.isAdmin ? "Admin ✓" : "Admin"; });
   document.body.classList.toggle("admin", state.isAdmin);
 }
 async function computeIsAdmin() {
@@ -1305,11 +1512,12 @@ async function toggleReminders() {
   } catch (e) { alert(friendly(e)); }
 }
 async function refreshRemindersButton() {
-  const btn = $("#btn-reminders");
   if (!pushSupported()) return;
   const st = await pushStatus();
-  btn.textContent = st.subscribed ? "Reminders on" : "Reminders";
-  btn.setAttribute("aria-pressed", st.subscribed ? "true" : "false");
+  $$(".js-reminders").forEach((btn) => {
+    btn.textContent = st.subscribed ? "Reminders on" : "Reminders";
+    btn.setAttribute("aria-pressed", st.subscribed ? "true" : "false");
+  });
 }
 
 // ---------- misc ----------
@@ -1391,15 +1599,20 @@ async function init() {
   $("#f-freq").onchange = syncComposerDisabled;
   $("#form-event").addEventListener("submit", (e) => e.preventDefault());
   document.addEventListener("keydown", (e) => {
-    if (state.chat.open && e.key === "Escape") { e.preventDefault(); closeChat(); return; }
+    if (state.activeTab === "chat" && e.key === "Escape") {
+      if (!$("#attach-sheet").hidden) { e.preventDefault(); closeAttachPicker(); return; }
+      if (isDesktop()) { e.preventDefault(); setTab("calendar"); return; }
+    }
     if (!state.composer.open) return;
     if (e.key === "Escape") { e.preventDefault(); closeComposer(false); }
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); saveComposer(); }
   });
 
-  // chat
-  $("#btn-chat").onclick = () => (state.chat.open ? closeChat() : openChat());
-  $("#chat-close").onclick = closeChat;
+  // tabs / chat
+  $("#tab-calendar").onclick = () => setTab("calendar");
+  $("#tab-chat").onclick = () => setTab("chat");
+  $("#btn-chat").onclick = () => setTab(state.activeTab === "chat" ? "calendar" : "chat");
+  $("#chat-close").onclick = () => setTab("calendar");
   $("#chat-form").addEventListener("submit", (e) => { e.preventDefault(); sendChat(); });
   $("#chat-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
@@ -1407,8 +1620,11 @@ async function init() {
   $("#chat-input").addEventListener("input", (e) => {
     e.target.style.height = "auto";
     e.target.style.height = Math.min(120, e.target.scrollHeight) + "px";
+    setSendReady();
   });
   $("#chat-emoji").onclick = toggleEmojiPop;
+  $("#attach-open").onclick = () => ($("#attach-sheet").hidden ? openAttachPicker() : closeAttachPicker());
+  $("#attach-cancel").onclick = closeAttachPicker;
   document.addEventListener("click", (e) => {
     const pop = $("#emoji-pop");
     if (!pop.hidden && !pop.contains(e.target) && e.target !== $("#chat-emoji")) pop.hidden = true;
@@ -1420,7 +1636,7 @@ async function init() {
   $("#lnk-export").onclick = exportIcs;
 
   // admin dialog
-  $("#btn-admin").onclick = () => $("#dialog-auth").showModal();
+  $$(".js-admin").forEach((b) => (b.onclick = () => $("#dialog-auth").showModal()));
   $("#form-auth").addEventListener("submit", (e) => {
     if (e.submitter && e.submitter.value === "close") return;
     e.preventDefault();
@@ -1449,19 +1665,25 @@ async function init() {
   });
 
   // reminders
-  $("#btn-reminders").onclick = toggleReminders;
+  $$(".js-reminders").forEach((b) => (b.onclick = toggleReminders));
   refreshRemindersButton();
+
+  // re-run tab layout when crossing the desktop breakpoint
+  const mq = matchMedia("(min-width: 1100px)");
+  mq.addEventListener("change", () => setTab(state.activeTab));
 
   await loadData();
   openDeepLinkedEvent();
 
   // chat: passive unread badge + live subscription for the session
-  checkChatUnread();
+  probeUnread();
   startChatRealtime();
-  if (new URLSearchParams(location.search).get("chat")) {
-    history.replaceState(null, "", location.pathname);
-    openChat();
-  }
+
+  const wantChat = new URLSearchParams(location.search).get("chat");
+  if (wantChat) history.replaceState(null, "", location.pathname);
+  let startTab = wantChat ? "chat" : "calendar";
+  try { startTab = wantChat ? "chat" : (localStorage.getItem(TAB_KEY) || "calendar"); } catch { /* ignore */ }
+  setTab(startTab === "chat" ? "chat" : "calendar");
 }
 
 window.__gc = state;
