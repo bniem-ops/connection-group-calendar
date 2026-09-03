@@ -69,7 +69,18 @@ const pad = (n) => String(n).padStart(2, "0");
 const catById = (id) => state.categories.find((c) => c.id === id);
 const catColor = (id) => (catById(id) ? catById(id).color : "#7d5411");
 const catName = (id) => (catById(id) ? catById(id).name : "Uncategorized");
-const catTextColor = (id) => (catById(id) ? darken(catById(id).color, 0.62) : "#7d5411");
+// Exact small-caps label shades from the handoff, keyed by the dot color.
+// Anything not in the table falls back to a darkened step.
+const LABEL_SHADE = {
+  "#b68235": "#7d5411", "#a35a6b": "#8a4a59", "#4a6670": "#3d5560",
+  "#9c4f2f": "#8a4526", "#5f7042": "#4a5a33", "#3f6b5c": "#33574a",
+  "#7b6ca8": "#655691", "#7d5411": "#7d5411",
+};
+const catTextColor = (id) => {
+  const c = catById(id);
+  if (!c) return "#7d5411";
+  return LABEL_SHADE[String(c.color).toLowerCase()] || darken(c.color, 0.62);
+};
 const occKey = (o) => `${o.event.id}:${o.date}`;
 const splitKey = (k) => { const i = k.lastIndexOf(":"); return [k.slice(0, i), k.slice(i + 1)]; };
 const dayNum = (dstr) => Number(dstr.slice(8, 10));
@@ -416,7 +427,8 @@ function renderNextUp() {
   const nx = all[0];
   if (!nx) return;
   const wd = new Intl.DateTimeFormat(undefined, { timeZone: GROUP_TIMEZONE, weekday: "short" }).format(nx.start);
-  host.textContent = `Next up — ${wd} ${dayNum(nx.date)}, ${nx.overrideTitle || nx.event.title}`;
+  const loc = nx.overrideLocation || nx.event.location;
+  host.textContent = `Next up — ${wd} ${dayNum(nx.date)}, ${nx.overrideTitle || nx.event.title}` + (loc ? ` at ${loc}` : "");
   host.onclick = () => selectDate(nx.date);
 }
 
@@ -725,6 +737,7 @@ function openEvent(occ) {
     updateNames(key);
 
     if (ev.collects_bring_list) {
+      wrap.appendChild(el("p", "kicker ev2__bringlbl", "BRINGING"));
       const bring = el("div", "ev2__bring");
       renderBringing(bring, occ);
       wrap.appendChild(bring);

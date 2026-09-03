@@ -146,11 +146,11 @@ button { font: inherit; color: inherit; }
   display: flex;
   align-items: baseline;
   gap: 12px;
-  padding: 13px var(--gutter) 9px;
+  padding: 12px var(--gutter) 8px;
 }
 .monthbar__label { margin: 0; font: 500 23px/1 var(--serif); font-feature-settings: var(--tnum); }
 .monthbar__label .yr { color: var(--color-faint); }
-.monthbar__nav { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.monthbar__nav { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 .navsq {
   width: 30px; height: 30px;
   border: 1px solid var(--color-divider); border-radius: var(--radius);
@@ -160,7 +160,7 @@ button { font: inherit; color: inherit; }
 .today-pill {
   border: 1px solid var(--color-accent); border-radius: var(--radius);
   background: none; color: var(--color-accent-700);
-  font: 600 12px/1 var(--serif); padding: 7px 12px; cursor: pointer;
+  font: 600 12px/1 var(--serif); padding: 5px 10px; cursor: pointer;
 }
 .monthbar__hint { display: none; }
 
@@ -185,12 +185,13 @@ button { font: inherit; color: inherit; }
   padding: 0 12px;
 }
 .cell {
-  min-height: 48px;
+  height: 46px; overflow: hidden;
   display: flex; flex-direction: column; align-items: center;
   padding-top: 5px;
   cursor: pointer;
   border: 0; background: none;
 }
+.cell--today, .cell--sel { padding-top: 3px; }
 .cell__num {
   font-size: 13px; font-feature-settings: var(--tnum);
   display: flex; align-items: center; justify-content: center;
@@ -199,24 +200,25 @@ button { font: inherit; color: inherit; }
 .cell--out .cell__num { color: var(--color-ghost); }
 .cell--today .cell__num {
   background: var(--color-accent-800); color: #f3f2f2; border-radius: 50%;
+  font: 600 15px/1 var(--serif); font-feature-settings: var(--tnum);
 }
 .cell--sel .cell__num {
   border: 1px solid var(--color-accent); color: var(--color-accent-800); border-radius: 50%;
 }
 .cell__dots { display: flex; gap: 3px; margin-top: 6px; min-height: 5px; }
-.cell--today .cell__dots, .cell--sel .cell__dots { margin-top: 2px; }
+.cell--today .cell__dots, .cell--sel .cell__dots { margin-top: 4px; }
 .cell__dots i { width: 5px; height: 5px; border-radius: 50%; display: block; }
 .cell__todaytag { display: none; }
 .cell__chips { display: none; }
 .cell__more { display: none; }
 
 /* ---------- day section (mobile) ---------- */
-.daysection { border-top: 1px solid var(--color-divider); margin-top: 14px; }
+.daysection { border-top: 1px solid var(--color-divider); margin-top: 9px; }
 .daysection.fade { animation: fade 120ms ease-out; }
 @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 .dayhead {
   display: flex; align-items: baseline; justify-content: space-between;
-  padding: 14px var(--gutter) 0;
+  padding: 13px var(--gutter) 0;
 }
 .dayhead__label {
   font-size: 9.5px; letter-spacing: 0.16em; text-transform: uppercase;
@@ -224,30 +226,31 @@ button { font: inherit; color: inherit; }
 }
 .dayhead__add { background: none; border: 0; padding: 0; font-size: 10px; color: var(--color-accent-700); cursor: pointer; }
 
-.daycards { display: flex; flex-direction: column; gap: 11px; padding: 12px var(--gutter) 0; }
+.daycards { display: flex; flex-direction: column; gap: 10px; padding: 11px var(--gutter) 0; }
 .daycard {
   border: 1px solid var(--color-divider); border-radius: var(--radius);
-  background: var(--color-card); padding: 13px 14px 12px;
+  background: var(--color-card); padding: 12px 14px;
   cursor: pointer;
 }
 .daycard__cat { display: flex; align-items: center; gap: 6px; }
 .daycard__cat .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
 .daycard__catname { font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; }
 .daycard__time { margin-left: auto; font-size: 11.5px; color: rgba(32, 31, 29, 0.6); font-feature-settings: var(--tnum); }
-.daycard__title { font: 500 21px/1.15 var(--serif); margin: 6px 0 0; }
-.daycard__loc { font-size: 12px; color: rgba(32, 31, 29, 0.62); margin: 2px 0 0; }
+.daycard__title { font: 500 21px/1.15 var(--serif); margin: 5px 0 0; }
+.daycard__loc { font-size: 12px; color: rgba(32, 31, 29, 0.62); margin: 3px 0 0; }
 .daycard__note { font: italic 400 12px/1.5 var(--body); color: rgba(32, 31, 29, 0.62); margin: 2px 0 0; }
 .dayempty { padding: 20px var(--gutter); text-align: center; }
 .dayempty p { font: italic 400 13px/1.5 var(--body); color: var(--color-faint); margin: 0 0 12px; }
 
 .nextup {
-  margin: 16px var(--gutter) 0;
+  margin: 14px var(--gutter) 4px;
+  padding: 2px 0;
   font-size: 12px; color: var(--color-accent-700); cursor: pointer;
 }
 .nextup:empty { display: none; }
 
 /* ---------- RSVP controls (shared) ---------- */
-.rsvp { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 11px; }
+.rsvp { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 .rsvp-btn {
   border: 1px solid var(--color-divider); border-radius: var(--radius);
   padding: 6px 14px; min-height: 32px;
@@ -321,7 +324,8 @@ button { font: inherit; color: inherit; }
 .ev2__names .sub { color: rgba(32, 31, 29, 0.5); display: block; }
 .ev2__nudge { margin-top: 8px; font-size: 12px; color: var(--color-accent-700); background: none; border: 0; padding: 0; cursor: pointer; }
 
-.ev2__bring { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 16px; }
+.ev2__bringlbl { margin: 16px 0 7px; }
+.ev2__bring { display: flex; flex-wrap: wrap; gap: 7px; }
 .chip-pill { border: 1px solid var(--color-divider); border-radius: 999px; padding: 5px 11px; font-size: 12px; background: none; }
 .chip-pill--add { border-style: dashed; border-color: var(--color-accent-400); color: var(--color-accent-700); cursor: pointer; }
 
@@ -353,7 +357,7 @@ button { font: inherit; color: inherit; }
 .msg__meta { display: flex; align-items: baseline; gap: 8px; }
 .msg__meta b {
   font: 600 13px/1 var(--serif); letter-spacing: 0.06em; text-transform: uppercase;
-  color: var(--color-accent-700);
+  color: var(--color-text);
 }
 .msg--mine .msg__meta b { color: var(--color-accent-800); }
 .msg__time { margin-left: auto; font-size: 10.5px; color: rgba(32, 31, 29, 0.42); font-feature-settings: var(--tnum); }
