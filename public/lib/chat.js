@@ -2,9 +2,12 @@
 
 import { supabase } from "./supabase.js";
 
+// members(display_name) alone is ambiguous now that message_reactions also
+// links messages<->members, so pin the join to the user_id FK explicitly.
 const MSG_COLS =
   "id, body, created_at, edited_at, deleted_at, user_id, " +
-  "attached_event_id, attached_occurrence_date, members(display_name)";
+  "attached_event_id, attached_occurrence_date, " +
+  "members!messages_user_id_fkey(display_name)";
 
 // Recent history, oldest-first for display. The members() join pulls the
 // poster's name in one round trip.
