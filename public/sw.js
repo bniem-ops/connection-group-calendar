@@ -1,6 +1,6 @@
 /* Group Calendar service worker: offline shell cache + Web Push handling. */
 
-const CACHE = "gc-shell-v9";
+const CACHE = "gc-shell-v10";
 const SHELL = [
   "./",
   "./index.html",
@@ -44,20 +44,32 @@ self.addEventListener("fetch", (event) => {
   // Navigations: network first, fall back to cached shell (offline).
   if (req.mode === "navigate") {
     event.respondWith(
-      fetch(req).catch(() => caches.match("./index.html"))
+      fetch(req)
+        .then((res) => {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put("./index.html", copy)).catch(() => {});
+          return res;
+        })
+        .catch(() => caches.match("./index.html"))
     );
     return;
   }
 
-  // Static assets: cache first, then network (and cache the result).
+  // Static assets: stale-while-revalidate. Serve the cached copy immediately
+  // (fast, offline-safe), but always refetch in the background and update the
+  // cache, so the next load is current even if the SW version wasn't bumped.
   event.respondWith(
     caches.match(req).then((hit) => {
-      if (hit) return hit;
-      return fetch(req).then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
-        return res;
-      });
+      const fresh = fetch(req)
+        .then((res) => {
+          if (res && res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+          }
+          return res;
+        })
+        .catch(() => hit);
+      return hit || fresh;
     })
   );
 });
