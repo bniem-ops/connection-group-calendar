@@ -47,6 +47,27 @@ export async function deleteReading(id) {
   if (error) throw error;
 }
 
+// The active group plan + its day list, or null if none is set. The date for
+// day N is starts_on + (N - 1) - derived on the client, never stored.
+export async function fetchActivePlan() {
+  const { data: plans, error } = await supabase
+    .from("reading_plans")
+    .select("id, name, subtitle, starts_on")
+    .eq("is_active", true)
+    .order("created_at", { ascending: false })
+    .limit(1);
+  if (error) throw error;
+  const plan = plans && plans[0];
+  if (!plan) return null;
+  const { data: days, error: e2 } = await supabase
+    .from("reading_plan_days")
+    .select("day_index, reference")
+    .eq("plan_id", plan.id)
+    .order("day_index", { ascending: true });
+  if (e2) throw e2;
+  return { ...plan, days: days || [] };
+}
+
 // Live INSERT/UPDATE/DELETE across the whole log. Returns an unsubscribe fn.
 export function subscribeReadings(onChange) {
   const ch = supabase

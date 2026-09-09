@@ -122,6 +122,12 @@ edit/delete **anything**. The calendar stays publicly readable and categories
 stay admin-only. Existing events (created_by = null) become admin-only to edit —
 see the comment at the bottom of the file to reassign them.
 
+### 10. (Optional) Reading plan + "Amen" reactions
+Run `supabase/11_reading_plan.sql` (needs `09_scripture.sql` first). Reading moves
+into its own **Reading** tab. The plan strip and the "The plan" sub-tab stay
+empty until an admin inserts a plan — see the header of the SQL file for the
+`insert` snippet. Reactions on other people's readings land in a follow-up.
+
 ---
 
 ## Local development

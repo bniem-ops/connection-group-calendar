@@ -23,6 +23,8 @@
     <div class="topbar__actions">
       <button id="btn-chat" class="linkbtn" type="button">Chat<span id="chat-count" class="count-badge" hidden></span></button>
       <span class="topbar__sep"></span>
+      <button id="btn-reading" class="linkbtn" type="button">Reading</button>
+      <span class="topbar__sep"></span>
       <button class="linkbtn js-reminders" type="button">Reminders</button>
       <span id="group-count" class="topbar__meta"></span>
       <span class="topbar__sep"></span>
@@ -125,12 +127,37 @@
         </div>
       </section>
 
+      <!-- ===== Reading tab ===== -->
+      <section id="view-reading" class="view" hidden>
+        <header class="viewhead">
+          <div>
+            <p class="kicker kicker--accent">MERCY HILL &middot; GILBERT/NIEMERSKI CG &middot; TUE 7:00 PM</p>
+            <h1 class="viewhead__title">Reading</h1>
+          </div>
+          <span class="viewhead__right">
+            <span id="reading-daycount" class="viewhead__meta"></span>
+            <button id="reading-close" class="btn btn--icon" type="button" aria-label="Close">&times;</button>
+          </span>
+        </header>
+
+        <div class="rdsub" role="tablist">
+          <button id="rdsub-today" class="rdsub__tab" type="button" role="tab" aria-selected="true">Today</button>
+          <button id="rdsub-plan" class="rdsub__tab" type="button" role="tab" aria-selected="false">The plan</button>
+        </div>
+
+        <div id="reading-scroll" class="rd" aria-live="polite"></div>
+      </section>
+
     </div>
 
     <nav class="tabbar" aria-label="Sections">
       <button id="tab-calendar" class="tab" type="button" aria-current="page">
         <span class="tab__ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"></rect><path d="M16 2v4M8 2v4M3 10h18"></path></svg></span>
         <span class="tab__label">Calendar</span>
+      </button>
+      <button id="tab-reading" class="tab" type="button">
+        <span class="tab__ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v14"></path><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"></path></svg></span>
+        <span class="tab__label">Reading</span>
       </button>
       <button id="tab-chat" class="tab" type="button">
         <span class="tab__ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg><span id="tab-chat-dot" class="tab__dot" hidden></span></span>
@@ -265,6 +292,7 @@
       <label class="field"><span>Passage</span>
         <input id="reading-ref" type="text" maxlength="200" required placeholder="e.g. John 3:16-21" />
       </label>
+      <div id="reading-chips" class="readchips" hidden></div>
       <label class="field"><span>Note <span class="field__opt">(optional)</span></span>
         <textarea id="reading-note" rows="3" maxlength="2000" placeholder="A verse that stood out, a question, a takeaway&hellip;"></textarea>
       </label>

@@ -18,6 +18,7 @@ import {
 import { monthGridDays, weekOf, addDays, startOfWeek } from "./lib/calendar.js";
 import {
   fetchReadings, addReading, updateReading, deleteReading, subscribeReadings,
+  fetchActivePlan,
 } from "./lib/scripture.js";
 import {
   getSession, onAuthChange, sendMagicLink, signOut, isEmailUser, ensureAnonSession,
@@ -68,6 +69,12 @@ const state = {
     muted: false, lastReadAt: null,
     attach: null,            // draft: { eventId, occurrenceDate }
     attachExpanded: false,
+  },
+  reading: {
+    sub: "today",            // "today" | "plan"
+    date: null,              // which day the Today sub-tab shows; null = today
+    plan: null,              // active reading_plan + days, or null
+    planLoaded: false,
   },
 };
 
@@ -247,7 +254,7 @@ function renderAll() {
   renderWeekhead();
   renderGrid(days);
   renderDaySection();
-  renderScripture();
+  renderDayReadLink();
   renderNextUp();
   renderLeftRail();
   renderWeekRail();
@@ -462,84 +469,255 @@ function buildDayCard(occ) {
   return card;
 }
 
-// ---------- daily scripture log ----------
-// One block per selected day: what the group read, plus "add what you read".
-// Baseline markup only - class names are stable for the Claude Design pass.
-function renderScripture() {
+// ---------- daily scripture reading ----------
+// The full experience is the Reading tab (renderReading). The calendar day
+// section only keeps a one-line pointer into it for the selected day.
+function renderDayReadLink() {
   const host = $("#scripture");
   if (!host) return;
   host.innerHTML = "";
   const sel = state.selectedDate;
   const rows = state.readingsByDate.get(sel) || [];
-
-  const head = el("div", "scrip__head");
-  head.appendChild(el("p", "kicker", "SCRIPTURE"));
-  const add = el("button", "scrip__add", rows.length ? "Add" : "Add what you read");
-  add.type = "button";
-  add.onclick = () => openReadingDialog(sel, null);
-  head.appendChild(add);
-  host.appendChild(head);
-
-  if (!rows.length) {
-    host.appendChild(el("p", "scrip__empty", "No readings logged for this day."));
-    return;
+  const link = el("button", "dayread", "");
+  link.type = "button";
+  if (rows.length) {
+    const n = new Set(rows.map((r) => r.user_id)).size;
+    link.textContent = `${n} ${n === 1 ? "person" : "people"} read on this day →`;
+    link.onclick = () => { state.reading.date = sel; state.reading.sub = "today"; setTab("reading"); };
+  } else {
+    link.classList.add("dayread--faint");
+    link.textContent = "Log a reading for this day →";
+    link.onclick = () => openReadingDialog(sel, null);
   }
-
-  const list = el("div", "scrip__list");
-  for (const r of rows) list.appendChild(buildReadingRow(r));
-  host.appendChild(list);
+  host.appendChild(link);
 }
 
-function buildReadingRow(r) {
-  const mine = r.user_id === state.myUserId;
-  const row = el("div", "scrip-row" + (mine ? " scrip-row--mine" : ""));
-  row.dataset.id = r.id;
+function refreshReadingViews() {
+  renderDayReadLink();
+  if (state.activeTab === "reading") renderReading();
+}
 
-  const top = el("div", "scrip-row__top");
-  top.appendChild(el("span", "scrip-row__ref", r.reference));
-  top.appendChild(el("span", "scrip-row__who", mine ? "You" : (r.display_name || "Someone")));
-  row.appendChild(top);
-
-  if (r.note) row.appendChild(el("p", "scrip-row__note", r.note));
-
-  if (mine || state.isAdmin) {
-    const actions = el("div", "scrip-row__actions");
-    if (mine) {
-      const edit = el("button", "linkbtn", "Edit");
-      edit.type = "button";
-      edit.onclick = () => openReadingDialog(r.reading_date, r);
-      actions.appendChild(edit);
-    }
-    const del = el("button", "linkbtn linkbtn--faint", "Delete");
-    del.type = "button";
-    del.onclick = async () => {
-      if (!confirm("Remove this reading?")) return;
-      const snapshot = { ...r };
-      applyReadingLocal(r, true);
-      renderScripture();
-      try { await deleteReading(r.id); }
-      catch (e) { applyReadingLocal(snapshot); renderScripture(); alert(friendly(e)); }
-    };
-    actions.appendChild(del);
-    row.appendChild(actions);
+function enterReading() {
+  if (!state.reading.date) state.reading.date = state.todayStr;
+  if (!state.reading.planLoaded) {
+    state.reading.planLoaded = true;
+    fetchActivePlan().then((p) => { state.reading.plan = p; renderReading(); }).catch(() => {});
   }
+  renderReading();
+}
+
+function renderReading() {
+  $("#rdsub-today").setAttribute("aria-selected", state.reading.sub === "today" ? "true" : "false");
+  $("#rdsub-plan").setAttribute("aria-selected", state.reading.sub === "plan" ? "true" : "false");
+  const host = $("#reading-scroll");
+  host.innerHTML = "";
+  if (state.reading.sub === "plan") return renderReadingPlan(host);
+  renderReadingToday(host);
+}
+
+// Full plan view + streak strips land in the next pass.
+function renderReadingPlan(host) {
+  $("#reading-daycount").textContent = "";
+  const p = state.reading.plan;
+  host.appendChild(el("p", "rd-empty", p
+    ? `${p.name} — the full plan view is coming in the next update.`
+    : "No reading plan is set yet. An admin can add one (see supabase/11_reading_plan.sql)."));
+}
+
+function readDayLabel(dstr) {
+  if (dstr === state.todayStr) return "Today";
+  if (dstr === addDays(state.todayStr, -1)) return "Yesterday";
+  return new Intl.DateTimeFormat(undefined, {
+    timeZone: GROUP_TIMEZONE, weekday: "short", month: "short", day: "numeric",
+  }).format(fieldsToInstant(dstr, "12:00"));
+}
+function dayIndexForPlan(plan, dstr) {
+  const diff = Math.round((Date.parse(dstr) - Date.parse(plan.starts_on)) / 86400000);
+  return diff >= 0 ? diff + 1 : null;
+}
+function listPhrase(arr) {
+  if (arr.length <= 1) return arr.join("");
+  if (arr.length === 2) return arr.join(" & ");
+  return arr.slice(0, -1).join(", ") + " & " + arr[arr.length - 1];
+}
+function myLastReading() {
+  let best = null;
+  for (const r of state.readings) {
+    if (r.user_id !== state.myUserId) continue;
+    if (!best || (r.created_at || "") > (best.created_at || "")) best = r;
+  }
+  return best;
+}
+
+function renderReadingToday(host) {
+  const date = state.reading.date || state.todayStr;
+  const isToday = date === state.todayStr;
+  const rows = state.readingsByDate.get(date) || [];
+  const readers = new Set(rows.map((r) => r.user_id));
+  const total = state.members.size || 0;
+  $("#reading-daycount").textContent =
+    `${readers.size} of ${total || "—"} ${isToday ? "today" : "that day"}`;
+
+  if (!isToday) {
+    const bar = el("div", "rd-back");
+    bar.appendChild(el("span", "rd-back__date", readDayLabel(date)));
+    const b = el("button", "linkbtn", "Back to today");
+    b.type = "button";
+    b.onclick = () => { state.reading.date = state.todayStr; renderReading(); };
+    bar.appendChild(b);
+    host.appendChild(bar);
+  }
+
+  const plan = state.reading.plan;
+  if (plan && plan.days.length) {
+    const idx = dayIndexForPlan(plan, date);
+    if (idx && idx <= plan.days.length) {
+      const ref = plan.days[idx - 1].reference;
+      const strip = el("div", "planstrip");
+      const l = el("div", "planstrip__l");
+      l.appendChild(el("p", "kicker", `THE GROUP'S PLAN · DAY ${idx} OF ${plan.days.length}`));
+      l.appendChild(el("p", "planstrip__name", plan.name));
+      strip.appendChild(l);
+      strip.appendChild(el("p", "planstrip__ref", ref));
+      strip.appendChild(el("p", "planstrip__hint", "Only a suggestion — log whatever you actually read."));
+      strip.onclick = () => openReadingDialog(date, null, ref);
+      host.appendChild(strip);
+    }
+  }
+
+  const mine = rows.filter((r) => r.user_id === state.myUserId);
+  const box = el("div", "rdentry");
+  if (!mine.length) {
+    box.appendChild(el("p", "rdentry__empty", isToday ? "Nothing logged yet today" : "You didn't log anything that day"));
+    const add = el("button", "btn btn--primary", "Log what you read");
+    add.type = "button";
+    add.onclick = () => openReadingDialog(date, null);
+    box.appendChild(add);
+  } else {
+    for (const r of mine) box.appendChild(buildMyReadingRow(r));
+    const more = el("button", "rdentry__add", "+ Add another");
+    more.type = "button";
+    more.onclick = () => openReadingDialog(date, null);
+    box.appendChild(more);
+  }
+  host.appendChild(box);
+
+  const others = rows.filter((r) => r.user_id !== state.myUserId).slice().reverse();
+  const withNote = others.filter((r) => r.note && r.note.trim());
+  const noNote = others.filter((r) => !(r.note && r.note.trim()));
+
+  const gHead = el("div", "rd-ghead");
+  gHead.appendChild(el("p", "kicker", "THE GROUP"));
+  gHead.appendChild(el("span", "rd-ghead__date", new Intl.DateTimeFormat(undefined, {
+    timeZone: GROUP_TIMEZONE, weekday: "long", month: "long", day: "numeric",
+  }).format(fieldsToInstant(date, "12:00"))));
+  host.appendChild(gHead);
+
+  if (!withNote.length && !noNote.length) {
+    host.appendChild(el("p", "rd-empty", "No one else has logged yet."));
+    return;
+  }
+  if (withNote.length) {
+    const list = el("div", "rdgroup");
+    for (const r of withNote) list.appendChild(buildGroupReadingRow(r));
+    host.appendChild(list);
+  }
+  if (noNote.length) {
+    const names = noNote.map((r) => r.display_name || state.members.get(r.user_id) || "Someone");
+    const also = el("p", "rd-also");
+    also.appendChild(document.createTextNode("Also read — "));
+    also.appendChild(el("span", "rd-also__names", listPhrase(names)));
+    host.appendChild(also);
+  }
+}
+
+function buildMyReadingRow(r) {
+  const row = el("div", "rdmine");
+  const top = el("div", "rdmine__top");
+  top.appendChild(el("span", "rdmine__who", "You"));
+  if (!String(r.id).startsWith("temp-")) {
+    top.appendChild(el("span", "rdmine__time", formatTime(new Date(r.created_at))));
+  }
+  row.appendChild(top);
+  row.appendChild(el("p", "rdmine__ref", r.reference));
+  if (r.note) row.appendChild(el("p", "rdmine__note", r.note));
+  const acts = el("div", "rdmine__acts");
+  const edit = el("button", "linkbtn", "Edit");
+  edit.type = "button";
+  edit.onclick = () => openReadingDialog(r.reading_date, r);
+  acts.appendChild(edit);
+  const del = el("button", "linkbtn linkbtn--faint", "Remove");
+  del.type = "button";
+  del.onclick = () => removeReadingRow(r);
+  acts.appendChild(del);
+  row.appendChild(acts);
   return row;
 }
 
-// existing: a reading row to edit, or null to add a new one for `dateStr`.
+function buildGroupReadingRow(r) {
+  const row = el("div", "rdrow");
+  const top = el("div", "rdrow__top");
+  top.appendChild(el("span", "rdrow__who", r.display_name || state.members.get(r.user_id) || "Someone"));
+  top.appendChild(el("span", "rdrow__time", formatTime(new Date(r.created_at))));
+  row.appendChild(top);
+  row.appendChild(el("p", "rdrow__ref", r.reference));
+  if (r.note) row.appendChild(el("p", "rdrow__note", r.note));
+  return row;
+}
+
+async function removeReadingRow(r) {
+  if (!confirm("Remove this reading?")) return;
+  const snap = { ...r };
+  applyReadingLocal(r, true);
+  refreshReadingViews();
+  try { await deleteReading(r.id); }
+  catch (e) { applyReadingLocal(snap); refreshReadingViews(); alert(friendly(e)); }
+}
+
+// existing: a reading row to edit, or null to add. prefillRef seeds the passage.
 let readingCtx = null;
-function openReadingDialog(dateStr, existing) {
+function openReadingDialog(dateStr, existing, prefillRef) {
   readingCtx = { date: dateStr, id: existing ? existing.id : null };
   const noon = fieldsToInstant(dateStr, "12:00");
   $("#reading-day").textContent = new Intl.DateTimeFormat(undefined, {
     timeZone: GROUP_TIMEZONE, weekday: "long", month: "long", day: "numeric",
   }).format(noon);
-  $("#reading-ref").value = existing ? existing.reference : "";
+  $("#reading-ref").value = existing ? existing.reference : (prefillRef || "");
   $("#reading-note").value = existing && existing.note ? existing.note : "";
   $("#reading-title").textContent = existing ? "Edit reading" : "What did you read?";
   $("#reading-msg").textContent = "";
+  renderReadingChips(existing ? null : dateStr);
   $("#dialog-reading").showModal();
   setTimeout(() => $("#reading-ref").focus(), 30);
+}
+
+function renderReadingChips(dateStr) {
+  const host = $("#reading-chips");
+  host.innerHTML = "";
+  if (!dateStr) { host.hidden = true; return; }
+  const chips = [];
+  const plan = state.reading.plan;
+  if (plan && plan.days.length) {
+    const idx = dayIndexForPlan(plan, dateStr);
+    if (idx && idx <= plan.days.length) {
+      const ref = plan.days[idx - 1].reference;
+      chips.push({ label: `Today's plan · ${ref}`, ref, dashed: true });
+    }
+  }
+  const last = myLastReading();
+  if (last && last.reference) chips.push({ label: `Where I left off · ${last.reference}`, ref: last.reference });
+  chips.push({ label: "A psalm", ref: "Psalm " });
+  for (const c of chips) {
+    const b = el("button", "readchip" + (c.dashed ? " readchip--dashed" : ""), c.label);
+    b.type = "button";
+    b.onclick = () => {
+      const i = $("#reading-ref");
+      i.value = c.ref; i.focus();
+      if (c.ref.endsWith(" ")) i.setSelectionRange(c.ref.length, c.ref.length);
+    };
+    host.appendChild(b);
+  }
+  host.hidden = false;
 }
 
 async function saveReadingFromDialog() {
@@ -554,7 +732,7 @@ async function saveReadingFromDialog() {
   try {
     if (id) {
       applyReadingLocal({ id, reference, note: note || null });
-      renderScripture();
+      refreshReadingViews();
       await updateReading(id, { reference, note: note || null });
     } else {
       const optimistic = {
@@ -562,15 +740,15 @@ async function saveReadingFromDialog() {
         reference, note: note || null, display_name: state.members.get(state.myUserId) || "You",
       };
       applyReadingLocal(optimistic);
-      renderScripture();
+      refreshReadingViews();
       const saved = await addReading(state.myUserId, date, reference, note);
       applyReadingLocal({ id: optimistic.id }, true);
       applyReadingLocal({ ...saved, display_name: state.members.get(state.myUserId) || null });
-      renderScripture();
+      refreshReadingViews();
     }
   } catch (e) {
     await loadRsvpData();
-    renderScripture();
+    refreshReadingViews();
     alert(friendly(e));
   }
 }
@@ -1435,24 +1613,30 @@ function setTab(name) {
 
   $("#tab-calendar").setAttribute("aria-current", name === "calendar" ? "page" : "false");
   $("#tab-chat").setAttribute("aria-current", name === "chat" ? "page" : "false");
+  $("#tab-reading").setAttribute("aria-current", name === "reading" ? "page" : "false");
 
   if (isDesktop()) {
+    // Chat and Reading are slide-in panels over the calendar on desktop.
     $("#view-calendar").hidden = false;
-    const cv = $("#view-chat");
-    if (name === "chat") {
-      cv.hidden = false;
-      requestAnimationFrame(() => cv.classList.add("is-open"));
-      enterChat();
-    } else {
-      cv.classList.remove("is-open");
-      setTimeout(() => { if (state.activeTab !== "chat") cv.hidden = true; }, 240);
+    for (const [tab, view, enter] of [["chat", "#view-chat", enterChat], ["reading", "#view-reading", enterReading]]) {
+      const v = $(view);
+      if (name === tab) {
+        v.hidden = false;
+        requestAnimationFrame(() => v.classList.add("is-open"));
+        enter();
+      } else {
+        v.classList.remove("is-open");
+        setTimeout(() => { if (state.activeTab !== tab) v.hidden = true; }, 240);
+      }
     }
     return;
   }
 
   $("#view-calendar").hidden = name !== "calendar";
   $("#view-chat").hidden = name !== "chat";
+  $("#view-reading").hidden = name !== "reading";
   if (name === "chat") enterChat();
+  if (name === "reading") enterReading();
 }
 
 const EMOJI_LIST = "😀 😁 😂 🤣 🙂 😊 😍 😘 😎 🤔 😴 😇 🙃 😅 😭 😢 😮 😡 😳 🥳 🥺 👍 👎 👏 🙌 🙏 💪 🤝 👀 🔥 ✨ ⭐ 💯 ✅ ❌ ❤️ 🧡 💛 💚 💙 💜 🖤 🎉 🎂 ☕ 🍕 🍺 🏈 📅 ⏰".split(" ");
@@ -1813,16 +1997,24 @@ async function init() {
       if (!$("#attach-sheet").hidden) { e.preventDefault(); closeAttachPicker(); return; }
       if (isDesktop()) { e.preventDefault(); setTab("calendar"); return; }
     }
+    if (state.activeTab === "reading" && e.key === "Escape" && isDesktop()) {
+      e.preventDefault(); setTab("calendar"); return;
+    }
     if (!state.composer.open) return;
     if (e.key === "Escape") { e.preventDefault(); closeComposer(false); }
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); saveComposer(); }
   });
 
-  // tabs / chat
+  // tabs / chat / reading
   $("#tab-calendar").onclick = () => setTab("calendar");
   $("#tab-chat").onclick = () => setTab("chat");
+  $("#tab-reading").onclick = () => setTab("reading");
   $("#btn-chat").onclick = () => setTab(state.activeTab === "chat" ? "calendar" : "chat");
   $("#chat-close").onclick = () => setTab("calendar");
+  $("#btn-reading").onclick = () => setTab(state.activeTab === "reading" ? "calendar" : "reading");
+  $("#reading-close").onclick = () => setTab("calendar");
+  $("#rdsub-today").onclick = () => { state.reading.sub = "today"; renderReading(); };
+  $("#rdsub-plan").onclick = () => { state.reading.sub = "plan"; renderReading(); };
   $("#chat-form").addEventListener("submit", (e) => { e.preventDefault(); sendChat(); });
   $("#chat-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
@@ -1908,15 +2100,16 @@ async function init() {
         row.display_name = state.members.get(row.user_id) || null;
         applyReadingLocal(row);
       }
-      renderScripture();
+      refreshReadingViews();
     });
   }
 
-  const wantChat = new URLSearchParams(location.search).get("chat");
-  if (wantChat) history.replaceState(null, "", location.pathname);
-  let startTab = wantChat ? "chat" : "calendar";
-  try { startTab = wantChat ? "chat" : (localStorage.getItem(TAB_KEY) || "calendar"); } catch { /* ignore */ }
-  setTab(startTab === "chat" ? "chat" : "calendar");
+  const params = new URLSearchParams(location.search);
+  const deep = params.get("chat") ? "chat" : params.get("read") ? "reading" : null;
+  if (deep) history.replaceState(null, "", location.pathname);
+  let startTab = deep;
+  try { startTab = deep || localStorage.getItem(TAB_KEY) || "calendar"; } catch { /* ignore */ }
+  setTab(["chat", "reading"].includes(startTab) ? startTab : "calendar");
 }
 
 window.__gc = state;
