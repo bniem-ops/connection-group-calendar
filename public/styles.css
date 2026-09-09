@@ -340,6 +340,56 @@ button { font: inherit; color: inherit; }
 }
 .readchip--dashed { border-style: dashed; border-color: var(--color-accent-400); color: var(--color-accent-700); }
 
+/* your-week strip (Today sub-tab) */
+.rdweek__streak { font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-accent-700); font-feature-settings: var(--tnum); }
+.rdweek { display: grid; grid-template-columns: repeat(7, 1fr); padding: 9px var(--gutter) 0; }
+.rdweek__cell { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 4px 0; }
+.rdweek__cell--tap { cursor: pointer; }
+.rdweek__ltr { font-size: 9px; letter-spacing: 0.12em; color: rgba(32, 31, 29, 0.42); }
+.rdweek__mark { width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--color-divider); }
+.rdweek__mark--read { background: var(--color-accent); border-color: var(--color-accent); }
+.rdweek__mark--today { border-color: var(--color-accent); }
+
+/* "The plan" sub-tab */
+.planhead { padding: 16px var(--gutter) 0; }
+.planhead__name { margin: 0; font: 400 30px/1.05 var(--serif); }
+.planhead__sub { margin: 4px 0 0; font-size: 12px; color: var(--color-muted); font-feature-settings: var(--tnum); }
+.planprog { display: flex; align-items: center; gap: 11px; margin-top: 12px; }
+.planprog__track { position: relative; flex: 1; height: 2px; background: var(--color-divider); }
+.planprog__fill { position: absolute; left: 0; top: 0; height: 100%; background: var(--color-accent); }
+.planprog__label { font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-accent-700); font-feature-settings: var(--tnum); }
+
+.plandays { padding: 8px var(--gutter) 0; }
+.planday {
+  display: flex; align-items: center; gap: 13px;
+  padding: 10px 0; border-top: 1px solid var(--color-divider); cursor: pointer;
+}
+.planday__num { width: 34px; text-align: right; font: 600 15px/1 var(--serif); font-feature-settings: var(--tnum); flex: none; }
+.planday__mid { flex: 1; min-width: 0; }
+.planday__ref { font: 500 16.5px/1.2 var(--serif); font-feature-settings: var(--tnum); }
+.planday__meta { display: block; margin-top: 2px; font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-accent-700); font-feature-settings: var(--tnum); }
+.planday__check { flex: none; font: 400 13px/1 var(--serif); color: var(--color-accent-800); }
+.planday--past .planday__num, .planday--past .planday__ref { color: rgba(32, 31, 29, 0.5); }
+.planday--today {
+  background: var(--rail-bg); border-top-color: var(--color-accent-300);
+  margin: 0 calc(-1 * var(--gutter)); padding-left: var(--gutter); padding-right: var(--gutter);
+}
+.planday--today .planday__num { font-size: 17px; color: var(--color-accent-800); }
+.planday--today .planday__ref { font-size: 18px; }
+
+.rd-more { display: block; background: none; border: 0; padding: 12px var(--gutter) 0; cursor: pointer; font-size: 11.5px; color: var(--color-accent-700); text-align: left; }
+
+/* who's reading */
+.rdwho { padding: 4px var(--gutter) 0; }
+.rdwho__row { padding: 11px 0 10px; border-bottom: 1px solid var(--color-divider); }
+.rdwho__row:last-child { border-bottom: 0; }
+.rdwho__top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.rdwho__name { font: 500 15.5px/1.2 var(--serif); }
+.rdwho__stat { font-size: 11.5px; color: rgba(32, 31, 29, 0.5); font-feature-settings: var(--tnum); }
+.rdwho__strip { display: flex; gap: 4px; margin-top: 7px; }
+.rdwho__m { width: 6px; height: 6px; border-radius: 50%; border: 1px solid var(--color-divider); }
+.rdwho__m--on { background: var(--color-accent); border-color: var(--color-accent); }
+
 /* ---------- RSVP controls (shared) ---------- */
 .rsvp { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 .rsvp-btn {

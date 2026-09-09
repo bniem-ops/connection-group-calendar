@@ -19,6 +19,7 @@ import { monthGridDays, weekOf, addDays, startOfWeek } from "./lib/calendar.js";
 import {
   fetchReadings, addReading, updateReading, deleteReading, subscribeReadings,
   fetchActivePlan,
+  fetchReadingReactions, addReadingReaction, removeReadingReaction,
 } from "./lib/scripture.js";
 import {
   getSession, onAuthChange, sendMagicLink, signOut, isEmailUser, ensureAnonSession,
@@ -75,6 +76,10 @@ const state = {
     date: null,              // which day the Today sub-tab shows; null = today
     plan: null,              // active reading_plan + days, or null
     planLoaded: false,
+    reax: [],                // [{reading_id, user_id, emoji}]
+    reaxLoaded: false,
+    planExpanded: false,     // "The plan" day list: show all vs window
+    whoExpanded: false,      // "who's reading": show all members
   },
 };
 
@@ -503,6 +508,7 @@ function enterReading() {
     state.reading.planLoaded = true;
     fetchActivePlan().then((p) => { state.reading.plan = p; renderReading(); }).catch(() => {});
   }
+  reloadReadingReax().then(() => { if (state.activeTab === "reading") renderReading(); });
   renderReading();
 }
 
@@ -515,13 +521,104 @@ function renderReading() {
   renderReadingToday(host);
 }
 
-// Full plan view + streak strips land in the next pass.
 function renderReadingPlan(host) {
   $("#reading-daycount").textContent = "";
-  const p = state.reading.plan;
-  host.appendChild(el("p", "rd-empty", p
-    ? `${p.name} — the full plan view is coming in the next update.`
-    : "No reading plan is set yet. An admin can add one (see supabase/11_reading_plan.sql)."));
+  const plan = state.reading.plan;
+  if (!plan || !plan.days.length) {
+    host.appendChild(el("p", "rd-empty",
+      "No reading plan is set yet. An admin can add one (see supabase/11_reading_plan.sql)."));
+    return;
+  }
+  const total = plan.days.length;
+  const todayIdx = Math.max(1, Math.min(total, dayIndexForPlan(plan, state.todayStr) || 1));
+
+  const head = el("div", "planhead");
+  head.appendChild(el("h2", "planhead__name", plan.name));
+  const startLabel = new Intl.DateTimeFormat(undefined, {
+    timeZone: GROUP_TIMEZONE, month: "short", day: "numeric",
+  }).format(fieldsToInstant(plan.starts_on, "12:00"));
+  head.appendChild(el("p", "planhead__sub",
+    `Started ${startLabel}${plan.subtitle ? " · " + plan.subtitle : ""}`));
+  const prog = el("div", "planprog");
+  const track = el("div", "planprog__track");
+  const fill = el("div", "planprog__fill");
+  fill.style.width = `${Math.round((todayIdx / total) * 100)}%`;
+  track.appendChild(fill);
+  prog.append(track, el("span", "planprog__label", `DAY ${todayIdx} OF ${total}`));
+  head.appendChild(prog);
+  host.appendChild(head);
+
+  const myDays = new Set();
+  for (const r of state.readings) if (r.user_id === state.myUserId) myDays.add(r.reading_date);
+
+  const from = state.reading.planExpanded ? 1 : Math.max(1, todayIdx - 2);
+  const to = state.reading.planExpanded ? total : Math.min(total, todayIdx + 2);
+  const days = el("div", "plandays");
+  for (let i = from; i <= to; i++) {
+    const dstr = addDays(plan.starts_on, i - 1);
+    const isToday = i === todayIdx;
+    const rw = el("div", "planday" + (isToday ? " planday--today" : "") + (i < todayIdx ? " planday--past" : ""));
+    rw.appendChild(el("span", "planday__num", String(i)));
+    const mid = el("div", "planday__mid");
+    mid.appendChild(el("span", "planday__ref", plan.days[i - 1].reference));
+    if (isToday) {
+      const readers = new Set((state.readingsByDate.get(state.todayStr) || []).map((x) => x.user_id));
+      mid.appendChild(el("span", "planday__meta", `TODAY · ${readers.size} OF ${state.members.size || "—"} HAVE READ`));
+    }
+    rw.appendChild(mid);
+    if (myDays.has(dstr)) rw.appendChild(el("span", "planday__check", "✓"));
+    rw.onclick = () => { state.reading.sub = "today"; state.reading.date = dstr; renderReading(); };
+    days.appendChild(rw);
+  }
+  host.appendChild(days);
+  if (!state.reading.planExpanded && total > to - from + 1) {
+    const more = el("button", "rd-more", `See all ${total} days`);
+    more.type = "button";
+    more.onclick = () => { state.reading.planExpanded = true; renderReading(); };
+    host.appendChild(more);
+  }
+
+  // who's reading, last 14 days
+  const whoHead = el("div", "rd-ghead");
+  whoHead.appendChild(el("p", "kicker", "WHO'S READING"));
+  whoHead.appendChild(el("span", "rd-ghead__date", "Last 14 days"));
+  host.appendChild(whoHead);
+
+  const last14 = [];
+  for (let k = 13; k >= 0; k--) last14.push(addDays(state.todayStr, -k));
+  const byUser = new Map();
+  for (const r of state.readings) {
+    if (!byUser.has(r.user_id)) byUser.set(r.user_id, new Set());
+    byUser.get(r.user_id).add(r.reading_date);
+  }
+  const members = [...state.members.entries()].map(([uid, name]) => ({ uid, name }));
+  members.sort((a, b) => {
+    if (a.uid === state.myUserId) return -1;
+    if (b.uid === state.myUserId) return 1;
+    return (a.name || "").localeCompare(b.name || "");
+  });
+  const shown = state.reading.whoExpanded ? members : members.slice(0, 3);
+  const who = el("div", "rdwho");
+  for (const m of shown) {
+    const set = byUser.get(m.uid) || new Set();
+    const got = last14.filter((d) => set.has(d)).length;
+    const rw = el("div", "rdwho__row");
+    const top = el("div", "rdwho__top");
+    top.appendChild(el("span", "rdwho__name", m.uid === state.myUserId ? "You" : (m.name || "Someone")));
+    top.appendChild(el("span", "rdwho__stat", `${got} of 14 · ${readingStreak(m.uid)}-day streak`));
+    rw.appendChild(top);
+    const strip = el("div", "rdwho__strip");
+    for (const d of last14) strip.appendChild(el("span", "rdwho__m" + (set.has(d) ? " rdwho__m--on" : "")));
+    rw.appendChild(strip);
+    who.appendChild(rw);
+  }
+  host.appendChild(who);
+  if (!state.reading.whoExpanded && members.length > 3) {
+    const more = el("button", "rd-more", `and ${members.length - 3} more · show all`);
+    more.type = "button";
+    more.onclick = () => { state.reading.whoExpanded = true; renderReading(); };
+    host.appendChild(more);
+  }
 }
 
 function readDayLabel(dstr) {
@@ -547,6 +644,75 @@ function myLastReading() {
     if (!best || (r.created_at || "") > (best.created_at || "")) best = r;
   }
   return best;
+}
+
+// Consecutive dates with >=1 reading, counted back from today. Today missing
+// doesn't break the streak until midnight.
+function readingStreak(userId) {
+  const days = new Set();
+  for (const r of state.readings) if (r.user_id === userId) days.add(r.reading_date);
+  let cursor = state.todayStr;
+  if (!days.has(cursor)) cursor = addDays(cursor, -1);
+  let n = 0;
+  while (days.has(cursor)) { n++; cursor = addDays(cursor, -1); }
+  return n;
+}
+
+// ---- reading reactions: same emoji model + markup as chat ----
+function readingReaxFor(id) {
+  const by = new Map();
+  for (const r of state.reading.reax) {
+    if (r.reading_id !== id) continue;
+    if (!by.has(r.emoji)) by.set(r.emoji, []);
+    by.get(r.emoji).push(r.user_id);
+  }
+  return [...by.entries()].map(([emoji, users]) => ({
+    emoji, count: users.length,
+    mine: users.includes(state.myUserId),
+    names: users.map((u) => state.members.get(u) || "Someone").join(", "),
+  }));
+}
+async function reloadReadingReax() {
+  const ids = state.readings.map((r) => r.id).filter((x) => !String(x).startsWith("temp-"));
+  try { state.reading.reax = await fetchReadingReactions(ids); } catch { /* ignore */ }
+}
+async function toggleReadingReax(id, emoji) {
+  if (!(await ensureMember())) return;
+  const has = state.reading.reax.some((r) => r.reading_id === id && r.user_id === state.myUserId && r.emoji === emoji);
+  if (has) state.reading.reax = state.reading.reax.filter((r) => !(r.reading_id === id && r.user_id === state.myUserId && r.emoji === emoji));
+  else state.reading.reax.push({ reading_id: id, user_id: state.myUserId, emoji });
+  renderReading();
+  try {
+    if (has) await removeReadingReaction(state.myUserId, id, emoji);
+    else await addReadingReaction(state.myUserId, id, emoji);
+  } catch (e) { console.warn(e); await reloadReadingReax(); renderReading(); }
+}
+function buildReadingReaxRow(id) {
+  const rr = el("div", "msg__reax");
+  for (const r of readingReaxFor(id)) {
+    const pill = el("button", "reax", `${r.emoji} ${r.count}`);
+    pill.type = "button";
+    pill.title = r.names;
+    pill.setAttribute("aria-pressed", r.mine ? "true" : "false");
+    pill.onclick = () => toggleReadingReax(id, r.emoji);
+    rr.appendChild(pill);
+  }
+  const add = el("button", "reax reax--add", "＋");
+  add.type = "button";
+  add.title = "Add a reaction";
+  add.onclick = () => {
+    if (rr.querySelector(".reax-quick")) { rr.querySelector(".reax-quick").remove(); return; }
+    const q = el("span", "reax-quick");
+    for (const e of QUICK_REAX) {
+      const b = el("button", null, e);
+      b.type = "button";
+      b.onclick = () => { q.remove(); toggleReadingReax(id, e); };
+      q.appendChild(b);
+    }
+    rr.appendChild(q);
+  };
+  rr.appendChild(add);
+  return rr;
 }
 
 function renderReadingToday(host) {
@@ -584,6 +750,32 @@ function renderReadingToday(host) {
       host.appendChild(strip);
     }
   }
+
+  // your week: seven marks + streak
+  const wk = weekOf(state.todayStr);
+  const myWeek = new Set();
+  for (const r of state.readings) if (r.user_id === state.myUserId) myWeek.add(r.reading_date);
+  const wkHead = el("div", "rd-ghead");
+  wkHead.appendChild(el("p", "kicker", "YOUR WEEK"));
+  const streak = readingStreak(state.myUserId);
+  if (streak > 0) wkHead.appendChild(el("span", "rdweek__streak", `${streak}-DAY STREAK`));
+  host.appendChild(wkHead);
+  const strip = el("div", "rdweek");
+  ["S", "M", "T", "W", "T", "F", "S"].forEach((ltr, i) => {
+    const d = wk.days[i];
+    const cell = el("div", "rdweek__cell");
+    cell.appendChild(el("span", "rdweek__ltr", ltr));
+    let mk = "rdweek__mark";
+    if (myWeek.has(d)) mk += " rdweek__mark--read";
+    else if (d === state.todayStr) mk += " rdweek__mark--today";
+    cell.appendChild(el("span", mk));
+    if (d <= state.todayStr) {
+      cell.classList.add("rdweek__cell--tap");
+      cell.onclick = () => { state.reading.date = d; renderReading(); };
+    }
+    strip.appendChild(cell);
+  });
+  host.appendChild(strip);
 
   const mine = rows.filter((r) => r.user_id === state.myUserId);
   const box = el("div", "rdentry");
@@ -661,7 +853,10 @@ function buildGroupReadingRow(r) {
   top.appendChild(el("span", "rdrow__time", formatTime(new Date(r.created_at))));
   row.appendChild(top);
   row.appendChild(el("p", "rdrow__ref", r.reference));
-  if (r.note) row.appendChild(el("p", "rdrow__note", r.note));
+  if (r.note) {
+    row.appendChild(el("p", "rdrow__note", r.note));
+    if (!String(r.id).startsWith("temp-")) row.appendChild(buildReadingReaxRow(r.id));
+  }
   return row;
 }
 
@@ -2091,6 +2286,17 @@ async function init() {
   // scripture: live-update the log while the app is open
   if (!state.readingSub) {
     state.readingSub = subscribeReadings(async (p) => {
+      if (p.table === "reading_reactions") {
+        const rx = p.eventType === "DELETE" ? p.old : p.new;
+        if (!rx) return;
+        const key = (x) => x.reading_id === rx.reading_id && x.user_id === rx.user_id && x.emoji === rx.emoji;
+        if (p.eventType === "DELETE") state.reading.reax = state.reading.reax.filter((x) => !key(x));
+        else if (!state.reading.reax.some(key)) {
+          state.reading.reax.push({ reading_id: rx.reading_id, user_id: rx.user_id, emoji: rx.emoji });
+        }
+        if (state.activeTab === "reading") renderReading();
+        return;
+      }
       if (p.eventType === "DELETE") applyReadingLocal(p.old, true);
       else {
         const row = p.new;

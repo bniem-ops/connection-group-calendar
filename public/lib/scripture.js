@@ -68,11 +68,40 @@ export async function fetchActivePlan() {
   return { ...plan, days: days || [] };
 }
 
-// Live INSERT/UPDATE/DELETE across the whole log. Returns an unsubscribe fn.
+// ---- emoji reactions (same model as chat's message_reactions) ----
+export async function fetchReadingReactions(readingIds) {
+  if (!readingIds.length) return [];
+  const { data, error } = await supabase
+    .from("reading_reactions")
+    .select("reading_id, user_id, emoji")
+    .in("reading_id", readingIds);
+  if (error) throw error;
+  return data || [];
+}
+
+export async function addReadingReaction(userId, readingId, emoji) {
+  const { error } = await supabase
+    .from("reading_reactions")
+    .insert({ reading_id: readingId, user_id: userId, emoji });
+  if (error && error.code !== "23505") throw error; // ignore "already reacted"
+}
+
+export async function removeReadingReaction(userId, readingId, emoji) {
+  const { error } = await supabase
+    .from("reading_reactions")
+    .delete()
+    .match({ reading_id: readingId, user_id: userId, emoji });
+  if (error) throw error;
+}
+
+// Live changes to the log AND its reactions. The callback gets the raw
+// postgres_changes payload; branch on `p.table`. Returns an unsubscribe fn.
 export function subscribeReadings(onChange) {
   const ch = supabase
     .channel("group-readings")
     .on("postgres_changes", { event: "*", schema: "public", table: "readings" },
+      (p) => onChange && onChange(p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "reading_reactions" },
       (p) => onChange && onChange(p))
     .subscribe();
   return () => supabase.removeChannel(ch);

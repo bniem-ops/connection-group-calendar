@@ -2,9 +2,9 @@
 -- Run after 09_scripture.sql. Safe to re-run.
 --
 -- The `readings` log itself needs nothing. This adds an optional group plan
--- (a suggestion shown in a strip you can ignore) and a single reaction kind
--- on other people's readings. No plan is seeded - the plan strip and the
--- "The plan" tab stay empty until you insert one:
+-- (a suggestion shown in a strip you can ignore) and emoji reactions on other
+-- people's readings (same model as chat). No plan is seeded - the plan strip
+-- and the "The plan" tab stay empty until you insert one:
 --
 --   insert into reading_plans (name, subtitle, starts_on)
 --   values ('John in 30 days', 'a chapter or so a morning', '2026-09-01')
@@ -30,12 +30,16 @@ create table if not exists reading_plan_days (
 -- The date for a plan day is starts_on + (day_index - 1); derived, never stored,
 -- so shifting starts_on reschedules the whole plan.
 
-create table if not exists reading_reactions (
+-- Same emoji-reaction model as chat's message_reactions (composite PK on the
+-- emoji, so one person can leave several). Was a single 'amen' kind in an
+-- earlier draft - drop that shape if it exists.
+drop table if exists reading_reactions cascade;
+create table reading_reactions (
   reading_id uuid not null references readings(id) on delete cascade,
   user_id    uuid not null references members(user_id) on delete cascade,
-  kind       text not null default 'amen' check (kind = 'amen'),
+  emoji      text not null,
   created_at timestamptz not null default now(),
-  primary key (reading_id, user_id, kind)
+  primary key (reading_id, user_id, emoji)
 );
 
 alter table reading_plans      enable row level security;
