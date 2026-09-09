@@ -1,6 +1,9 @@
 -- DANGER: drops every Group Calendar table and all its data.
 -- Only use this if you want to start the schema over from scratch.
 
+drop table if exists readings           cascade;
+drop table if exists message_reactions  cascade;
+drop table if exists messages           cascade;
 drop table if exists rsvps              cascade;
 drop table if exists members            cascade;
 drop table if exists notification_log   cascade;

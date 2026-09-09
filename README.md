@@ -109,6 +109,12 @@ and run it (adds the `notify_chat` column + the trigger). Anyone who has tapped
 **Reminders** now also gets a push per message; the chat panel has a **Mute chat**
 toggle to opt out of just chat.
 
+### 8. (Optional) Daily scripture log
+Run `supabase/07_reactions.sql`, `supabase/08_chat_attach.sql`, then
+`supabase/09_scripture.sql`. The last one adds a `readings` table; open a day on
+the calendar and a **Scripture** block lets anyone log what they read (passage +
+an optional note), visible to the whole group and live-updating.
+
 ---
 
 ## Local development

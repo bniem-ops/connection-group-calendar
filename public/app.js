@@ -17,6 +17,9 @@ import {
 } from "./lib/chat.js";
 import { monthGridDays, weekOf, addDays, startOfWeek } from "./lib/calendar.js";
 import {
+  fetchReadings, addReading, updateReading, deleteReading, subscribeReadings,
+} from "./lib/scripture.js";
+import {
   getSession, onAuthChange, sendMagicLink, signOut, isEmailUser, ensureAnonSession,
 } from "./lib/auth.js";
 import {
@@ -46,6 +49,10 @@ const state = {
   rsvpMine: new Map(),
   rsvpCounts: new Map(),
   myUserId: null,
+
+  readings: [],                     // scripture log rows
+  readingsByDate: new Map(),        // "YYYY-MM-DD" -> [row, ...]
+  readingSub: null,                 // realtime unsubscribe fn
 
   focusedKey: null,                 // desktop right-rail focused occurrence
 
@@ -163,11 +170,33 @@ async function loadData() {
 async function loadRsvpData() {
   if (!state.myUserId) return;
   try {
-    const [rsvps, members] = await Promise.all([fetchRsvps(), fetchMembers()]);
+    const [rsvps, members, readings] = await Promise.all([
+      fetchRsvps(), fetchMembers(), fetchReadings().catch(() => state.readings),
+    ]);
     state.rsvps = rsvps;
     state.members = members;
+    state.readings = readings;
     recomputeRsvp();
+    recomputeReadings();
   } catch (e) { console.warn("RSVP load failed", e); }
+}
+
+function recomputeReadings() {
+  const m = new Map();
+  for (const r of state.readings) {
+    if (!m.has(r.reading_date)) m.set(r.reading_date, []);
+    m.get(r.reading_date).push(r);
+  }
+  state.readingsByDate = m;
+}
+
+// Fold one changed row into state without a full refetch (optimistic + realtime).
+function applyReadingLocal(row, removed) {
+  const i = state.readings.findIndex((r) => r.id === row.id);
+  if (removed) { if (i >= 0) state.readings.splice(i, 1); }
+  else if (i >= 0) state.readings[i] = { ...state.readings[i], ...row };
+  else state.readings.push(row);
+  recomputeReadings();
 }
 function recomputeRsvp() {
   state.rsvpMine = new Map();
@@ -215,6 +244,7 @@ function renderAll() {
   renderWeekhead();
   renderGrid(days);
   renderDaySection();
+  renderScripture();
   renderNextUp();
   renderLeftRail();
   renderWeekRail();
@@ -426,6 +456,119 @@ function buildDayCard(occ) {
   }
   card.addEventListener("click", (e) => { if (e.target.closest(".rsvp")) return; openEvent(occ); });
   return card;
+}
+
+// ---------- daily scripture log ----------
+// One block per selected day: what the group read, plus "add what you read".
+// Baseline markup only - class names are stable for the Claude Design pass.
+function renderScripture() {
+  const host = $("#scripture");
+  if (!host) return;
+  host.innerHTML = "";
+  const sel = state.selectedDate;
+  const rows = state.readingsByDate.get(sel) || [];
+
+  const head = el("div", "scrip__head");
+  head.appendChild(el("p", "kicker", "SCRIPTURE"));
+  const add = el("button", "scrip__add", rows.length ? "Add" : "Add what you read");
+  add.type = "button";
+  add.onclick = () => openReadingDialog(sel, null);
+  head.appendChild(add);
+  host.appendChild(head);
+
+  if (!rows.length) {
+    host.appendChild(el("p", "scrip__empty", "No readings logged for this day."));
+    return;
+  }
+
+  const list = el("div", "scrip__list");
+  for (const r of rows) list.appendChild(buildReadingRow(r));
+  host.appendChild(list);
+}
+
+function buildReadingRow(r) {
+  const mine = r.user_id === state.myUserId;
+  const row = el("div", "scrip-row" + (mine ? " scrip-row--mine" : ""));
+  row.dataset.id = r.id;
+
+  const top = el("div", "scrip-row__top");
+  top.appendChild(el("span", "scrip-row__ref", r.reference));
+  top.appendChild(el("span", "scrip-row__who", mine ? "You" : (r.display_name || "Someone")));
+  row.appendChild(top);
+
+  if (r.note) row.appendChild(el("p", "scrip-row__note", r.note));
+
+  if (mine || state.isAdmin) {
+    const actions = el("div", "scrip-row__actions");
+    if (mine) {
+      const edit = el("button", "linkbtn", "Edit");
+      edit.type = "button";
+      edit.onclick = () => openReadingDialog(r.reading_date, r);
+      actions.appendChild(edit);
+    }
+    const del = el("button", "linkbtn linkbtn--faint", "Delete");
+    del.type = "button";
+    del.onclick = async () => {
+      if (!confirm("Remove this reading?")) return;
+      const snapshot = { ...r };
+      applyReadingLocal(r, true);
+      renderScripture();
+      try { await deleteReading(r.id); }
+      catch (e) { applyReadingLocal(snapshot); renderScripture(); alert(friendly(e)); }
+    };
+    actions.appendChild(del);
+    row.appendChild(actions);
+  }
+  return row;
+}
+
+// existing: a reading row to edit, or null to add a new one for `dateStr`.
+let readingCtx = null;
+function openReadingDialog(dateStr, existing) {
+  readingCtx = { date: dateStr, id: existing ? existing.id : null };
+  const noon = fieldsToInstant(dateStr, "12:00");
+  $("#reading-day").textContent = new Intl.DateTimeFormat(undefined, {
+    timeZone: GROUP_TIMEZONE, weekday: "long", month: "long", day: "numeric",
+  }).format(noon);
+  $("#reading-ref").value = existing ? existing.reference : "";
+  $("#reading-note").value = existing && existing.note ? existing.note : "";
+  $("#reading-title").textContent = existing ? "Edit reading" : "What did you read?";
+  $("#reading-msg").textContent = "";
+  $("#dialog-reading").showModal();
+  setTimeout(() => $("#reading-ref").focus(), 30);
+}
+
+async function saveReadingFromDialog() {
+  if (!readingCtx) return;
+  const reference = $("#reading-ref").value.trim();
+  const note = $("#reading-note").value.trim();
+  if (!reference) { $("#reading-msg").textContent = "Add a passage, e.g. “John 1”."; return; }
+  if (!(await ensureMember())) { $("#reading-msg").textContent = "Set a display name first."; return; }
+
+  const { date, id } = readingCtx;
+  $("#dialog-reading").close();
+  try {
+    if (id) {
+      applyReadingLocal({ id, reference, note: note || null });
+      renderScripture();
+      await updateReading(id, { reference, note: note || null });
+    } else {
+      const optimistic = {
+        id: `temp-${Date.now()}`, user_id: state.myUserId, reading_date: date,
+        reference, note: note || null, display_name: state.members.get(state.myUserId) || "You",
+      };
+      applyReadingLocal(optimistic);
+      renderScripture();
+      const saved = await addReading(state.myUserId, date, reference, note);
+      applyReadingLocal({ id: optimistic.id }, true);
+      applyReadingLocal({ ...saved, display_name: state.members.get(state.myUserId) || null });
+      renderScripture();
+    }
+  } catch (e) {
+    await loadRsvpData();
+    renderScripture();
+    alert(friendly(e));
+  }
 }
 
 function renderNextUp() {
@@ -1707,6 +1850,13 @@ async function init() {
     if (nameResolver) { const r = nameResolver; nameResolver = null; r(null); }
   });
 
+  // scripture dialog
+  $("#form-reading").addEventListener("submit", (e) => {
+    if (e.submitter && e.submitter.value !== "ok") return;   // Cancel / close
+    e.preventDefault();
+    saveReadingFromDialog();
+  });
+
   // reminders
   $$(".js-reminders").forEach((b) => (b.onclick = toggleReminders));
   refreshRemindersButton();
@@ -1721,6 +1871,22 @@ async function init() {
   // chat: passive unread badge + live subscription for the session
   probeUnread();
   startChatRealtime();
+
+  // scripture: live-update the log while the app is open
+  if (!state.readingSub) {
+    state.readingSub = subscribeReadings(async (p) => {
+      if (p.eventType === "DELETE") applyReadingLocal(p.old, true);
+      else {
+        const row = p.new;
+        if (!state.members.has(row.user_id)) {
+          try { state.members = await fetchMembers(); } catch { /* ignore */ }
+        }
+        row.display_name = state.members.get(row.user_id) || null;
+        applyReadingLocal(row);
+      }
+      renderScripture();
+    });
+  }
 
   const wantChat = new URLSearchParams(location.search).get("chat");
   if (wantChat) history.replaceState(null, "", location.pathname);

@@ -75,6 +75,7 @@
             <div id="weekhead" class="weekhead"></div>
             <div id="grid" class="grid" role="grid"></div>
             <section id="daysection" class="daysection"></section>
+            <section id="scripture" class="scripture"></section>
             <p id="nextup" class="nextup"></p>
             <p id="status-line" class="status-line" role="status"></p>
           </main>
@@ -249,6 +250,28 @@
         <input id="c-name" type="text" placeholder="New category" maxlength="60" />
         <input id="c-color" type="color" value="#b68235" />
         <button id="btn-add-category" class="btn" type="button">Add</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Log / edit a scripture reading for a day -->
+  <dialog id="dialog-reading" class="dialog">
+    <form id="form-reading" method="dialog">
+      <div class="dialog__head">
+        <h3 id="reading-title">What did you read?</h3>
+        <button class="btn btn--icon" value="cancel" aria-label="Close" type="submit" formnovalidate>&times;</button>
+      </div>
+      <p id="reading-day" class="muted"></p>
+      <label class="field"><span>Passage</span>
+        <input id="reading-ref" type="text" maxlength="200" required placeholder="e.g. John 3:16-21" />
+      </label>
+      <label class="field"><span>Note <span class="field__opt">(optional)</span></span>
+        <textarea id="reading-note" rows="3" maxlength="2000" placeholder="A verse that stood out, a question, a takeaway&hellip;"></textarea>
+      </label>
+      <p id="reading-msg" class="form-msg"></p>
+      <div class="dialog__foot">
+        <button class="btn" value="cancel" type="submit" formnovalidate>Cancel</button>
+        <button id="btn-reading-save" class="btn btn--primary" value="ok" type="submit">Save</button>
       </div>
     </form>
   </dialog>
