@@ -242,6 +242,7 @@ button { font: inherit; color: inherit; }
 .daycard__title { font: 500 21px/1.15 var(--serif); margin: 5px 0 0; }
 .daycard__loc { font-size: 12px; color: rgba(32, 31, 29, 0.62); margin: 3px 0 0; }
 .daycard__note { font: italic 400 12px/1.5 var(--body); color: rgba(32, 31, 29, 0.62); margin: 2px 0 0; }
+.daycard__by { font-size: 10.5px; letter-spacing: 0.04em; color: var(--color-faint); margin: 6px 0 0; }
 .dayempty { padding: 20px var(--gutter); text-align: center; }
 .dayempty p { font: italic 400 13px/1.5 var(--body); color: var(--color-faint); margin: 0 0 12px; }
 
@@ -323,6 +324,7 @@ button { font: inherit; color: inherit; }
 .ev2__when { display: flex; align-items: baseline; gap: 10px; margin-top: 9px; font-feature-settings: var(--tnum); }
 .ev2__date { font: 600 19px/1 var(--serif); }
 .ev2__time { font-size: 13px; color: rgba(32, 31, 29, 0.6); }
+.ev2__by { margin: 7px 0 0; font-size: 11.5px; color: var(--color-faint); }
 .ev2__rule { height: 1px; background: var(--color-divider); margin: 14px 0; }
 .ev2__desc { font: 400 14px/1.65 var(--body); text-align: justify; hyphens: auto; }
 .ev2__meta { display: flex; gap: 22px; }
@@ -618,7 +620,7 @@ button { font: inherit; color: inherit; }
   }
   .topbar__title { font-size: 25px; }
   #group-count, .topbar__sep { display: inline-block; }
-  body.admin #btn-new-event { display: inline-block; }
+  #btn-new-event { display: inline-block; }
 
   .layout {
     max-width: none; margin: 0;
@@ -716,10 +718,14 @@ button { font: inherit; color: inherit; }
   .cell--sel { background: var(--sel-day); outline: 1px solid var(--color-accent-300); outline-offset: -1px; }
   .cell--drop { background: var(--color-accent-100); }
   .cell__plus {
-    position: absolute; top: 4px; right: 6px; font-size: 14px; color: var(--color-faint);
+    position: absolute; top: 2px; right: 3px; width: 18px; height: 18px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; color: var(--color-accent-700); cursor: pointer;
+    border-radius: var(--radius);
     opacity: 0; pointer-events: none;
   }
-  .cell:hover .cell__plus { opacity: 1; }
+  .cell:hover .cell__plus { opacity: 1; pointer-events: auto; }
+  .cell__plus:hover { background: var(--color-accent-100); }
 
   .chip { border-left: 2px solid var(--color-divider); padding-left: 7px; cursor: pointer; }
   .chip__time { display: block; font-size: 10.5px; color: rgba(32, 31, 29, 0.55); font-feature-settings: var(--tnum); }

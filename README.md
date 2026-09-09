@@ -115,6 +115,13 @@ Run `supabase/07_reactions.sql`, `supabase/08_chat_attach.sql`, then
 the calendar and a **Scripture** block lets anyone log what they read (passage +
 an optional note), visible to the whole group and live-updating.
 
+### 9. (Optional) Let everyone add events
+Run `supabase/10_open_events.sql`. It flips events from admin-only writes to:
+anyone (no login) can add events and edit/delete **their own**; admins can still
+edit/delete **anything**. The calendar stays publicly readable and categories
+stay admin-only. Existing events (created_by = null) become admin-only to edit —
+see the comment at the bottom of the file to reassign them.
+
 ---
 
 ## Local development

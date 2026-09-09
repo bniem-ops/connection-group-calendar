@@ -67,6 +67,10 @@ async function writeEventRow(row, existingId) {
 
 export async function saveEvent(payload, existingId) {
   const { reminders = [], ...row } = payload;
+  // created_by is stamped once, on insert. Never send it on an update - an
+  // admin editing someone else's event must not take ownership of it.
+  if (existingId) delete row.created_by;
+  else if (!row.created_by) delete row.created_by;
   let eventId = existingId;
 
   const res = await writeEventRow(row, existingId);

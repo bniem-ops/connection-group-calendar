@@ -91,6 +91,9 @@ const catTextColor = (id) => {
 };
 const occKey = (o) => `${o.event.id}:${o.date}`;
 const splitKey = (k) => { const i = k.lastIndexOf(":"); return [k.slice(0, i), k.slice(i + 1)]; };
+// Anyone with a session can add events; you can change your own, admins any.
+const canEditEvent = (ev) => state.isAdmin || !!(ev && ev.created_by && ev.created_by === state.myUserId);
+const eventCreatorName = (ev) => (ev && ev.created_by ? state.members.get(ev.created_by) || null : null);
 const dayNum = (dstr) => Number(dstr.slice(8, 10));
 
 function darken(hex, f) {
@@ -310,17 +313,19 @@ function renderGrid(days) {
       cell.appendChild(chips);
       if (list.length > 2) cell.appendChild(el("span", "cell__more", `+${list.length - 2} more`));
       const plus = el("span", "cell__plus", "+");
+      plus.title = "Add an event on this day";
+      plus.addEventListener("click", (e) => { e.stopPropagation(); selectDate(d.dateStr); startNewEvent(d.dateStr); });
       cell.appendChild(plus);
-      if (state.isAdmin) {
-        cell.addEventListener("dragover", (e) => { e.preventDefault(); cell.classList.add("cell--drop"); });
-        cell.addEventListener("dragleave", () => cell.classList.remove("cell--drop"));
-        cell.addEventListener("drop", (e) => onChipDrop(e, cell));
-      }
+      // Drop target for drag-to-reschedule; onChipDrop re-checks ownership.
+      cell.addEventListener("dragover", (e) => { e.preventDefault(); cell.classList.add("cell--drop"); });
+      cell.addEventListener("dragleave", () => cell.classList.remove("cell--drop"));
+      cell.addEventListener("drop", (e) => onChipDrop(e, cell));
     }
 
     cell.addEventListener("click", (e) => {
       if (e.target.closest(".chip")) return;
       selectDate(d.dateStr);
+      // admins keep the click-to-add shortcut; everyone else uses the "+".
       if (state.isAdmin && desktop) openComposer("new", null, d.dateStr);
     });
     host.appendChild(cell);
@@ -340,7 +345,7 @@ function buildChip(occ) {
     state.focusedKey = occKey(occ);
     renderWeekRail();
   });
-  if (state.isAdmin && isDesktop() && !ev.rrule) {
+  if (canEditEvent(ev) && isDesktop() && !ev.rrule) {
     chip.draggable = true;
     chip.addEventListener("dragstart", (e) => e.dataTransfer.setData("text/plain", occKey(occ)));
   }
@@ -354,7 +359,7 @@ async function onChipDrop(e, cell) {
   const newDate = cell.dataset.date;
   if (!newDate || newDate === oldDate) return;
   const ev = state.events.find((x) => x.id === evId);
-  if (!ev || ev.rrule) return;
+  if (!ev || ev.rrule || !canEditEvent(ev)) return;
   const s = new Date(ev.starts_at);
   const p = zonedParts(s);
   const newStart = fieldsToInstant(newDate, `${pad(p.hour)}:${pad(p.minute)}`);
@@ -408,24 +413,20 @@ function renderDaySection() {
 
   const head = el("div", "dayhead");
   head.appendChild(el("span", "dayhead__label", labelBits.join(" · ")));
-  if (state.isAdmin) {
-    const add = el("button", "dayhead__add", "Add");
-    add.type = "button";
-    add.onclick = () => openComposer("new", null, sel);
-    head.appendChild(add);
-  }
+  const add = el("button", "dayhead__add", "Add");
+  add.type = "button";
+  add.onclick = () => startNewEvent(sel);
+  head.appendChild(add);
   host.appendChild(head);
 
   const list = state.occByDate.get(sel) || [];
   if (!list.length) {
     const empty = el("div", "dayempty");
     empty.appendChild(el("p", null, "Nothing on this day"));
-    if (state.isAdmin) {
-      const b = el("button", "btn", "Add an event");
-      b.type = "button";
-      b.onclick = () => openComposer("new", null, sel);
-      empty.appendChild(b);
-    }
+    const b = el("button", "btn", "Add an event");
+    b.type = "button";
+    b.onclick = () => startNewEvent(sel);
+    empty.appendChild(b);
     host.appendChild(empty);
     return;
   }
@@ -449,6 +450,9 @@ function buildDayCard(occ) {
   if (loc) card.appendChild(el("div", "daycard__loc", loc));
   const note = (ev.description || "").split("\n")[0].trim();
   if (note) card.appendChild(el("div", "daycard__note", note));
+  const by = eventCreatorName(ev);
+  if (by) card.appendChild(el("div", "daycard__by",
+    "Added by " + (ev.created_by === state.myUserId ? "you" : by)));
   if (ev.asks_rsvp && occ.date >= state.todayStr) {
     const rc = el("div", "rsvp");
     renderRsvpControls(rc, occ, "strip");
@@ -702,14 +706,18 @@ function renderWeekRail() {
   openBtn.type = "button";
   openBtn.onclick = () => openEvent(focused);
   actions.appendChild(openBtn);
-  if (state.isAdmin) {
+  if (canEditEvent(focused.event)) {
     const edit = el("button", null, "Edit");
     edit.type = "button";
     edit.onclick = () => openComposer("edit", focused.event, null);
+    actions.appendChild(edit);
+  }
+  {
     const dup = el("button", null, "Duplicate");
     dup.type = "button";
-    dup.onclick = () => openComposer("new", { ...focused.event, id: null, title: `${focused.event.title} (copy)` }, focused.date);
-    actions.append(edit, dup);
+    dup.onclick = () => startNewEvent(focused.date,
+      { ...focused.event, id: null, title: `${focused.event.title} (copy)` });
+    actions.appendChild(dup);
   }
   fx.appendChild(actions);
   rail.appendChild(fx);
@@ -874,6 +882,10 @@ function openEvent(occ) {
   when.appendChild(el("span", "ev2__time", ev.all_day ? "All day" : timeLabel(occ)));
   wrap.appendChild(when);
 
+  const by = eventCreatorName(ev);
+  if (by) wrap.appendChild(el("p", "ev2__by",
+    "Added by " + (ev.created_by === state.myUserId ? "you" : by)));
+
   const note = (ev.description || "").trim();
   if (note) { wrap.appendChild(el("div", "ev2__rule")); wrap.appendChild(el("p", "ev2__desc", note)); }
   wrap.appendChild(el("div", "ev2__rule"));
@@ -917,7 +929,7 @@ function openEvent(occ) {
     }
   }
 
-  if (state.isAdmin) {
+  if (canEditEvent(ev)) {
     const foot = el("div", "composer__foot");
     const edit = el("button", "btn", "Edit");
     edit.type = "button";
@@ -1503,6 +1515,13 @@ function remindValue(reminders) {
   return ["15", "60", "1440", "2880"].includes(String(m)) ? String(m) : (m ? "1440" : "");
 }
 
+// New-event entry point: make sure there's a member (name) first so the event
+// is attributable and the created_by FK is satisfied.
+async function startNewEvent(prefillDate, seed) {
+  if (!(await ensureMember())) return;
+  openComposer("new", seed || null, prefillDate || state.selectedDate);
+}
+
 function openComposer(mode, ev, prefillDate) {
   state.composer = { open: true, mode, eventId: ev && ev.id ? ev.id : null };
   $("#composer-kicker").textContent = mode === "edit" ? "Edit event" : "New event";
@@ -1557,6 +1576,10 @@ async function saveComposer() {
   const title = $("#f-title").value.trim();
   const date = $("#f-date").value;
   if (!title || !date) { fail("Give it a title and a date."); return; }
+  if (state.composer.mode === "new" && !(await ensureMember())) {
+    fail("Set a display name first so the group knows who added this.");
+    return;
+  }
   const allday = $("#f-allday").checked;
 
   let starts_at, ends_at = null;
@@ -1585,6 +1608,7 @@ async function saveComposer() {
     rrule: buildRRule({ freq: $("#f-freq").value, interval: $("#f-interval").value }),
     recurrence_end: $("#f-freq").value && $("#f-until").value ? $("#f-until").value : null,
     reminders: remind ? [Number(remind)] : [],
+    created_by: state.myUserId,   // stripped on update by saveEvent()
   };
 
   $("#btn-save-event").disabled = true;
@@ -1668,8 +1692,8 @@ async function refreshAuthUI() {
   if (signedIn) {
     $("#auth-who").textContent = s.user.email;
     $("#auth-admin-note").textContent = state.isAdmin
-      ? "You can create and edit events."
-      : "This email is not on the admin list, so editing will be blocked. Ask an admin to add it.";
+      ? "Admin: you can edit and delete anything on the calendar."
+      : "Anyone can add events and manage their own. Admin rights (edit/delete everything, categories) need this email on the admin list.";
   }
   $$(".js-admin").forEach((b) => { b.textContent = state.isAdmin ? "Admin ✓" : "Admin"; });
   document.body.classList.toggle("admin", state.isAdmin);
@@ -1771,7 +1795,7 @@ async function init() {
   });
 
   // composer
-  $("#btn-new-event").onclick = () => openComposer("new", null, state.selectedDate);
+  $("#btn-new-event").onclick = () => startNewEvent(state.selectedDate);
   $("#composer-close").onclick = () => closeComposer(false);
   $("#btn-cancel-event").onclick = () => closeComposer(false);
   $("#btn-save-event").onclick = saveComposer;
