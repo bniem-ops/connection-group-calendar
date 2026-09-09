@@ -58,6 +58,19 @@ button { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .tnum, .num { font-feature-settings: var(--tnum); }
 
+/* iOS Safari zooms the whole page (and lets you pan it) whenever a focused
+   text field computes under 16px. Raise every small control to 16px on phones
+   so focusing the chat box - or any field - doesn't shift the layout. */
+@media (max-width: 640px) {
+  .field input, .field select, .field textarea,
+  .cchat__row1 textarea,
+  .dialog input, .dialog textarea, .dialog select,
+  .category-row input,
+  #reading-ref {
+    font-size: 16px;
+  }
+}
+
 .kicker {
   font: 600 9.5px/1.2 var(--serif);
   letter-spacing: 0.16em;
