@@ -47,7 +47,7 @@ export async function fetchEvents() {
 // 04_rsvps.sql hasn't been applied or PostgREST's schema cache is stale. Rather
 // than hard-fail the whole save, drop any column the API reports as unknown and
 // retry - the feature just won't persist until the migration lands.
-const OPTIONAL_EVENT_COLS = ["photo_url", "asks_rsvp", "collects_bring_list"];
+const OPTIONAL_EVENT_COLS = ["photo_url", "asks_rsvp", "collects_bring_list", "signup_label", "signup_slots"];
 
 async function writeEventRow(row, existingId) {
   for (let attempt = 0; attempt < OPTIONAL_EVENT_COLS.length + 1; attempt++) {

@@ -1,6 +1,10 @@
 -- DANGER: drops every Group Calendar table and all its data.
 -- Only use this if you want to start the schema over from scratch.
 
+drop table if exists event_signups      cascade;
+drop table if exists reading_reactions  cascade;
+drop table if exists reading_plan_days  cascade;
+drop table if exists reading_plans      cascade;
 drop table if exists readings           cascade;
 drop table if exists message_reactions  cascade;
 drop table if exists messages           cascade;
@@ -15,3 +19,4 @@ drop table if exists categories         cascade;
 drop table if exists admins             cascade;
 drop function if exists is_admin()      cascade;
 drop function if exists set_updated_at() cascade;
+drop function if exists check_signup_capacity() cascade;

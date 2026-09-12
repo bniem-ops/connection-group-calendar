@@ -122,7 +122,19 @@ edit/delete **anything**. The calendar stays publicly readable and categories
 stay admin-only. Existing events (created_by = null) become admin-only to edit —
 see the comment at the bottom of the file to reassign them.
 
-### 10. (Optional) Reading plan + reactions
+### 10. (Optional) Sign-up sheet (snack, meal train, ...)
+Run `supabase/12_signup_sheet.sql` (needs `04_rsvps.sql` first). Adds a
+per-event rotation sheet, separate from RSVPs: claiming a slot doesn't answer
+"are you coming," and each occurrence caps at a configurable number of slots
+(2 by default). Turn it on for an event in the composer ("Sign-up sheet"
+checkbox + a label like "Snack" and a slot count); it then shows on that
+event's detail page, plus a quick-glance nudge ("Needs a Snack — Sep 23 →")
+in the mobile day view and the desktop left rail whenever an upcoming week is
+open. Admins can also assign a name directly (no app account needed) — see
+the SQL file's header for the back-fill snippet if you already have a
+schedule worked out.
+
+### 11. (Optional) Reading plan + reactions
 Run `supabase/11_reading_plan.sql` (needs `09_scripture.sql` first). Reading has
 its own **Reading** tab with a "Today" and a "The plan" sub-tab, per-week and
 per-member streak strips (all computed client-side), and the same emoji

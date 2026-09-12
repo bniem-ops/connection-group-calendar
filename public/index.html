@@ -56,6 +56,7 @@
             <div class="rail__rule"></div>
             <p class="kicker">Needs you</p>
             <p id="needs-you" class="rail__needs"></p>
+            <div id="rail-signup" class="rail__signup" hidden></div>
             <div class="rail__rule"></div>
             <nav class="rail__links">
               <button id="lnk-categories" class="rail__link" type="button">Manage categories</button>
@@ -78,6 +79,7 @@
             <div id="grid" class="grid" role="grid"></div>
             <section id="daysection" class="daysection"></section>
             <section id="scripture" class="scripture"></section>
+            <button id="needsnack" class="needsnack" type="button" hidden></button>
             <p id="nextup" class="nextup"></p>
             <p id="status-line" class="status-line" role="status"></p>
           </main>
@@ -220,6 +222,12 @@
 
       <label class="field field--check"><input id="f-rsvp" type="checkbox" checked /><span>Ask for RSVPs</span></label>
       <label class="field field--check"><input id="f-bring" type="checkbox" /><span>Collect a bring-list</span></label>
+
+      <label class="field field--check"><input id="f-signup" type="checkbox" /><span>Sign-up sheet (snack, meal train, etc.)</span></label>
+      <div id="f-signup-fields" class="field-row" hidden>
+        <label class="field field--grow"><span>Label</span><input id="f-signup-label" type="text" maxlength="40" placeholder="Snack" /></label>
+        <label class="field"><span>Slots per week</span><input id="f-signup-slots" type="number" min="1" max="6" value="2" /></label>
+      </div>
 
       <p id="form-msg" class="form-msg"></p>
 

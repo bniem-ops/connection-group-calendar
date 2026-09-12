@@ -22,6 +22,9 @@ import {
   fetchReadingReactions, addReadingReaction, removeReadingReaction,
 } from "./lib/scripture.js";
 import {
+  fetchSignups, claimSignup, assignSignup, deleteSignup, subscribeSignups,
+} from "./lib/signup.js";
+import {
   getSession, onAuthChange, sendMagicLink, signOut, isEmailUser, ensureAnonSession,
 } from "./lib/auth.js";
 import {
@@ -55,6 +58,11 @@ const state = {
   readings: [],                     // scripture log rows
   readingsByDate: new Map(),        // "YYYY-MM-DD" -> [row, ...]
   readingSub: null,                 // realtime unsubscribe fn
+
+  signups: [],                      // all event_signups rows
+  signupsByEvent: new Map(),        // event_id -> [row, ...] sorted by date
+  signupSub: null,
+  openOcc: null,                    // occurrence currently shown in #dialog-event, if any
 
   focusedKey: null,                 // desktop right-rail focused occurrence
 
@@ -185,15 +193,51 @@ async function loadData() {
 async function loadRsvpData() {
   if (!state.myUserId) return;
   try {
-    const [rsvps, members, readings] = await Promise.all([
+    const [rsvps, members, readings, signups] = await Promise.all([
       fetchRsvps(), fetchMembers(), fetchReadings().catch(() => state.readings),
+      fetchSignups().catch(() => state.signups),
     ]);
     state.rsvps = rsvps;
     state.members = members;
     state.readings = readings;
+    state.signups = signups;
     recomputeRsvp();
     recomputeReadings();
+    recomputeSignups();
   } catch (e) { console.warn("RSVP load failed", e); }
+}
+
+function recomputeSignups() {
+  const m = new Map();
+  for (const r of state.signups) {
+    if (!m.has(r.event_id)) m.set(r.event_id, []);
+    m.get(r.event_id).push(r);
+  }
+  for (const list of m.values()) list.sort((a, b) => (a.occurrence_date < b.occurrence_date ? -1 : 1));
+  state.signupsByEvent = m;
+}
+function addSignupLocal(row) {
+  state.signups.push(row);
+  recomputeSignups();
+}
+async function removeSignupRow(r) {
+  const snap = { ...r };
+  state.signups = state.signups.filter((x) => x.id !== r.id);
+  recomputeSignups();
+  refreshSignupViews(r.event_id);
+  try { await deleteSignup(r.id); }
+  catch (e) {
+    state.signups.push(snap);
+    recomputeSignups();
+    refreshSignupViews(r.event_id);
+    alert(friendly(e));
+  }
+}
+function refreshSignupViews(eventId) {
+  renderNeedsSnackNudge();
+  if (isDesktop()) renderLeftRail();
+  const dlg = $("#dialog-event");
+  if (dlg.open && state.openOcc && state.openOcc.event.id === eventId) openEvent(state.openOcc);
 }
 
 function recomputeReadings() {
@@ -260,6 +304,7 @@ function renderAll() {
   renderGrid(days);
   renderDaySection();
   renderDayReadLink();
+  renderNeedsSnackNudge();
   renderNextUp();
   renderLeftRail();
   renderWeekRail();
@@ -1023,6 +1068,29 @@ function renderLeftRail() {
     needs.textContent = "You're all caught up.";
   }
   $("#group-count").textContent = `Group (${state.members.size})`;
+
+  const signupHost = $("#rail-signup");
+  const info = nextOpenSignup();
+  if (!info) { signupHost.hidden = true; signupHost.innerHTML = ""; }
+  else {
+    signupHost.hidden = false;
+    signupHost.innerHTML = "";
+    signupHost.appendChild(el("p", "kicker", info.ev.signup_label.toUpperCase()));
+    const label = new Intl.DateTimeFormat(undefined, {
+      timeZone: GROUP_TIMEZONE, month: "short", day: "numeric",
+    }).format(fieldsToInstant(info.date, "12:00"));
+    const line = el("p", "rail__needs");
+    line.textContent = `Needs someone — ${label}. `;
+    const btn = el("button", null, "Sign up →");
+    btn.type = "button";
+    btn.onclick = () => {
+      selectDate(info.date);
+      const occ = (state.occByDate.get(info.date) || []).find((o) => o.event.id === info.ev.id);
+      if (occ) openEvent(occ);
+    };
+    line.appendChild(btn);
+    signupHost.appendChild(line);
+  }
 }
 
 // ---------- desktop right rail (selected week) ----------
@@ -1216,6 +1284,138 @@ function renderBringing(container, occ) {
   container.appendChild(add);
 }
 
+// ---------- rotation sign-up sheet (snack, meal train, ...) ----------
+// Distinct from RSVP: claiming a slot doesn't answer "are you coming", and
+// each occurrence caps at ev.signup_slots.
+function nextOccurrencesForEvent(ev, count) {
+  if (!ev.rrule) {
+    const d = ymd(new Date(ev.starts_at));
+    return d >= state.todayStr ? [d] : [];
+  }
+  const from = fieldsToInstant(state.todayStr, "00:00");
+  const to = fieldsToInstant(addDays(state.todayStr, 7 * (count + 6)), "00:00");
+  return expandAll([ev], from, to).slice(0, count).map((o) => o.date);
+}
+
+function buildSignupSheet(ev, occ) {
+  const wrap = el("div", "signup");
+  wrap.appendChild(el("p", "kicker signup__kicker", `${ev.signup_label.toUpperCase()} SHEET`));
+  const dates = ev.rrule ? nextOccurrencesForEvent(ev, 6) : [occ.date];
+  const rows = state.signupsByEvent.get(ev.id) || [];
+  for (const d of dates) {
+    wrap.appendChild(buildSignupWeekRow(ev, d, rows.filter((r) => r.occurrence_date === d)));
+  }
+  return wrap;
+}
+
+function buildSignupWeekRow(ev, dateStr, rowsForDate) {
+  const row = el("div", "signup-wk");
+  const label = new Intl.DateTimeFormat(undefined, {
+    timeZone: GROUP_TIMEZONE, weekday: "short", month: "short", day: "numeric",
+  }).format(fieldsToInstant(dateStr, "12:00"));
+  row.appendChild(el("span", "signup-wk__date", label));
+  const slots = el("div", "signup-wk__slots");
+  const cap = ev.signup_slots || 2;
+  for (let i = 0; i < cap; i++) {
+    const taken = rowsForDate[i];
+    slots.appendChild(taken ? buildSignupTaken(taken) : buildSignupOpen(ev, dateStr));
+  }
+  row.appendChild(slots);
+  return row;
+}
+
+function buildSignupTaken(r) {
+  const mine = r.user_id && r.user_id === state.myUserId;
+  const name = r.display_name || state.members.get(r.user_id) || "Someone";
+  const pill = el("div", "signup-slot signup-slot--filled" + (mine ? " signup-slot--mine" : ""));
+  pill.appendChild(el("span", "signup-slot__name", mine ? "You" : name));
+  if (r.note) pill.appendChild(el("span", "signup-slot__note", r.note));
+  if (mine || state.isAdmin) {
+    const x = el("button", "signup-slot__x", "×");
+    x.type = "button";
+    x.title = "Remove";
+    x.onclick = () => {
+      if (!confirm(`Remove ${mine ? "your" : name + "’s"} sign-up?`)) return;
+      removeSignupRow(r);
+    };
+    pill.appendChild(x);
+  }
+  return pill;
+}
+
+function buildSignupOpen(ev, dateStr) {
+  const pill = el("div", "signup-slot signup-slot--open");
+  const claim = el("button", "signup-slot__claim", "Open — sign up");
+  claim.type = "button";
+  claim.onclick = () => claimSignupFlow(ev, dateStr);
+  pill.appendChild(claim);
+  if (state.isAdmin) {
+    const assign = el("button", "signup-slot__assign", "Assign");
+    assign.type = "button";
+    assign.title = "Put a name on this slot for someone who hasn't opened the app yet";
+    assign.onclick = () => assignSignupFlow(ev, dateStr);
+    pill.appendChild(assign);
+  }
+  return pill;
+}
+
+async function claimSignupFlow(ev, dateStr) {
+  if (!(await ensureMember())) return;
+  const note = (prompt(`Sign up for ${ev.signup_label} on ${dateStr}. Bringing anything specific? (optional)`) || "").trim();
+  try {
+    const saved = await claimSignup(ev.id, dateStr, state.myUserId, note);
+    addSignupLocal(saved);
+    refreshSignupViews(ev.id);
+  } catch (e) { alert(friendly(e)); }
+}
+
+async function assignSignupFlow(ev, dateStr) {
+  const name = (prompt(`Assign someone to ${ev.signup_label} on ${dateStr}:`) || "").trim();
+  if (!name) return;
+  const note = (prompt("Bringing anything specific? (optional)") || "").trim();
+  try {
+    const saved = await assignSignup(ev.id, dateStr, name, note);
+    addSignupLocal(saved);
+    refreshSignupViews(ev.id);
+  } catch (e) { alert(friendly(e)); }
+}
+
+// Earliest upcoming occurrence, across all sign-up-enabled events, that still
+// has an open slot. Powers the rail/day-view nudge.
+function nextOpenSignup() {
+  let best = null;
+  for (const ev of state.events) {
+    if (!ev.signup_label) continue;
+    const cap = ev.signup_slots || 2;
+    const rows = state.signupsByEvent.get(ev.id) || [];
+    for (const d of nextOccurrencesForEvent(ev, 8)) {
+      const filled = rows.filter((r) => r.occurrence_date === d).length;
+      if (filled < cap) {
+        if (!best || d < best.date) best = { date: d, ev, filled, cap };
+        break; // only the soonest open date per event matters
+      }
+    }
+  }
+  return best;
+}
+
+function renderNeedsSnackNudge() {
+  const host = $("#needsnack");
+  if (!host) return;
+  const info = nextOpenSignup();
+  if (!info) { host.hidden = true; return; }
+  const label = new Intl.DateTimeFormat(undefined, {
+    timeZone: GROUP_TIMEZONE, month: "short", day: "numeric",
+  }).format(fieldsToInstant(info.date, "12:00"));
+  host.hidden = false;
+  host.textContent = `Needs a ${info.ev.signup_label} — ${label} →`;
+  host.onclick = () => {
+    selectDate(info.date);
+    const occ = (state.occByDate.get(info.date) || []).find((o) => o.event.id === info.ev.id);
+    if (occ) openEvent(occ);
+  };
+}
+
 // ---------- event detail sheet (Screen 2) ----------
 function openEvent(occ) {
   const ev = occ.event;
@@ -1302,6 +1502,8 @@ function openEvent(occ) {
     }
   }
 
+  if (ev.signup_label) wrap.appendChild(buildSignupSheet(ev, occ));
+
   if (canEditEvent(ev)) {
     const foot = el("div", "composer__foot");
     const edit = el("button", "btn", "Edit");
@@ -1321,7 +1523,8 @@ function openEvent(occ) {
     wrap.appendChild(foot);
   }
 
-  $("#dialog-event").showModal();
+  state.openOcc = occ;
+  if (!$("#dialog-event").open) $("#dialog-event").showModal();
 }
 
 function shareEvent(occ) {
@@ -1925,6 +2128,9 @@ function openComposer(mode, ev, prefillDate) {
   $("#f-remind").value = ev ? remindValue(ev.reminders) : "1440";
   $("#f-rsvp").checked = ev ? ev.asks_rsvp !== false : true;
   $("#f-bring").checked = ev ? !!ev.collects_bring_list : false;
+  $("#f-signup").checked = ev ? !!ev.signup_label : false;
+  $("#f-signup-label").value = ev && ev.signup_label ? ev.signup_label : "";
+  $("#f-signup-slots").value = ev && ev.signup_slots ? ev.signup_slots : 2;
   syncComposerDisabled();
 
   $("#composer").hidden = false;
@@ -1947,6 +2153,7 @@ function syncComposerDisabled() {
   document.querySelectorAll(".time-only input").forEach((i) => (i.disabled = allday));
   const repeats = !!$("#f-freq").value;
   document.querySelectorAll(".repeat-only input").forEach((i) => (i.disabled = !repeats));
+  $("#f-signup-fields").hidden = !$("#f-signup").checked;
 }
 
 async function saveComposer() {
@@ -1984,6 +2191,8 @@ async function saveComposer() {
     starts_at, ends_at, all_day: allday,
     asks_rsvp: $("#f-rsvp").checked,
     collects_bring_list: $("#f-bring").checked,
+    signup_label: $("#f-signup").checked ? ($("#f-signup-label").value.trim() || "Snack") : null,
+    signup_slots: Math.max(1, Number($("#f-signup-slots").value) || 2),
     rrule: buildRRule({ freq: $("#f-freq").value, interval: $("#f-interval").value }),
     recurrence_end: $("#f-freq").value && $("#f-until").value ? $("#f-until").value : null,
     reminders: remind ? [Number(remind)] : [],
@@ -2186,6 +2395,7 @@ async function init() {
   };
   $("#f-allday").onchange = syncComposerDisabled;
   $("#f-freq").onchange = syncComposerDisabled;
+  $("#f-signup").onchange = syncComposerDisabled;
   $("#form-event").addEventListener("submit", (e) => e.preventDefault());
   document.addEventListener("keydown", (e) => {
     if (state.activeTab === "chat" && e.key === "Escape") {
@@ -2260,6 +2470,7 @@ async function init() {
   $("#dialog-name").addEventListener("close", () => {
     if (nameResolver) { const r = nameResolver; nameResolver = null; r(null); }
   });
+  $("#dialog-event").addEventListener("close", () => { state.openOcc = null; });
 
   // scripture dialog
   $("#form-reading").addEventListener("submit", (e) => {
@@ -2307,6 +2518,22 @@ async function init() {
         applyReadingLocal(row);
       }
       refreshReadingViews();
+    });
+  }
+
+  // sign-up sheet: live-update so a claimed slot disappears for everyone
+  if (!state.signupSub) {
+    state.signupSub = subscribeSignups((p) => {
+      const row = p.eventType === "DELETE" ? p.old : p.new;
+      if (!row) return;
+      if (p.eventType === "DELETE") {
+        state.signups = state.signups.filter((x) => x.id !== row.id);
+      } else {
+        const i = state.signups.findIndex((x) => x.id === row.id);
+        if (i >= 0) state.signups[i] = row; else state.signups.push(row);
+      }
+      recomputeSignups();
+      refreshSignupViews(row.event_id);
     });
   }
 
